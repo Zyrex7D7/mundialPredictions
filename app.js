@@ -22,18 +22,18 @@ const R32_PAIRS = [
   ["Alemanha", "Paraguai"],
   ["França", "Suécia"],
   ["África do Sul", "Canadá"],
-  ["Brasil", "Arábia Saudita"],
-  ["Portugal", "Egito"],
-  ["Argentina", "Catar"],
-  ["Inglaterra", "Irão"],
-  ["Países Baixos", "Marrocos"],
-  ["Espanha", "Coreia do Sul"],
-  ["Bélgica", "Tunísia"],
-  ["Croácia", "Austrália"],
-  ["Uruguai", "Senegal"],
-  ["Itália", "Japão"],
-  ["EUA", "México"],
-  ["Dinamarca", "Polónia"],
+  ["Holanda", "Marrocos"],
+  ["Brasil", "Japão"],
+  ["Costa do Marfim", "Noruega"],
+  ["México", "Equador"],
+  ["Inglaterra", "RD Congo"],
+  ["Portugal", "Croácia"],
+  ["Espanha", "Áustria"],
+  ["Estados Unidos", "Bósnia-Herzegovina"],
+  ["Bélgica", "Senegal"],
+  ["Argentina", "Cabo Verde"],
+  ["Austrália", "Egito"],
+  ["Suíça", "Argélia"],
   ["Colômbia", "Gana"],
 ];
 
@@ -162,7 +162,28 @@ function calcPoints(prediction, result) {
    6. CONTAS (nome + password, globais, coleção "accounts")
    ==================================================================== */
 
-async function signupOrLogin(name, password) {
+// Cria uma conta NOVA. Dá erro se já existir uma conta com este nome,
+// para evitar criar contas a mais por engano de digitação.
+async function signup(name, password) {
+  const id = normalizeCode(name);
+  if (!id) throw new Error("Escreve um nome válido.");
+  if (!password) throw new Error("Escreve uma password.");
+
+  const ref = db.collection("accounts").doc(id);
+  const snap = await ref.get();
+
+  if (snap.exists) {
+    throw new Error(`Já existe uma conta com o nome "${name}". Se é a tua, usa o botão "Entrar".`);
+  }
+
+  await ref.set({ displayName: name.trim(), password });
+  return { name: name.trim(), password };
+}
+
+// Entra numa conta que já existe. Dá erro se o nome não existir ou se a
+// password estiver errada — assim ninguém cria contas novas sem querer
+// ao escrever mal o nome que já usou antes.
+async function login(name, password) {
   const id = normalizeCode(name);
   if (!id) throw new Error("Escreve um nome válido.");
   if (!password) throw new Error("Escreve uma password.");
@@ -171,12 +192,9 @@ async function signupOrLogin(name, password) {
   const snap = await ref.get();
 
   if (!snap.exists) {
-    // conta nova
-    await ref.set({ displayName: name.trim(), password });
-    return { name: name.trim(), password };
+    throw new Error(`Não existe nenhuma conta com o nome "${name}". Confirma se escreveste bem, ou usa "Criar conta".`);
   }
 
-  // conta existente — valida password
   const data = snap.data();
   if (data.password !== password) {
     throw new Error("Password incorreta para esse nome.");
@@ -415,10 +433,12 @@ function renderAuthView() {
   card.appendChild(el("label", {}, "Password"));
   card.appendChild(passInput);
 
-  const btn = el("button", { class: "primary", style: "width:100%;margin-top:16px" }, "Entrar / Criar conta");
-  btn.onclick = async () => {
+  const btnRow = el("div", { style: "display:flex;gap:10px;margin-top:16px" });
+
+  const loginBtn = el("button", { class: "primary", style: "flex:1" }, "Entrar");
+  loginBtn.onclick = async () => {
     try {
-      const account = await signupOrLogin(nameInput.value, passInput.value);
+      const account = await login(nameInput.value, passInput.value);
       state.account = account;
       saveSessionAccount(account);
       render();
@@ -426,7 +446,22 @@ function renderAuthView() {
       showError(card, e.message);
     }
   };
-  card.appendChild(btn);
+
+  const signupBtn = el("button", { style: "flex:1" }, "Criar conta");
+  signupBtn.onclick = async () => {
+    try {
+      const account = await signup(nameInput.value, passInput.value);
+      state.account = account;
+      saveSessionAccount(account);
+      render();
+    } catch (e) {
+      showError(card, e.message);
+    }
+  };
+
+  btnRow.appendChild(loginBtn);
+  btnRow.appendChild(signupBtn);
+  card.appendChild(btnRow);
 
   appEl.appendChild(card);
 }
