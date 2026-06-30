@@ -82,6 +82,37 @@ const KICKOFFS = {
   final_1: "2026-07-19T20:00:00+01:00", // Jogo 104 - Vencedor jogo 101 x Vencedor jogo 102
 };
 
+/* ---------- 1b. BANDEIRAS ---------- */
+
+const FLAGS = {
+  "Alemanha": "🇩🇪", "Paraguai": "🇵🇾", "França": "🇫🇷", "Suécia": "🇸🇪",
+  "África do Sul": "🇿🇦", "Canadá": "🇨🇦", "Holanda": "🇳🇱", "Marrocos": "🇲🇦",
+  "Brasil": "🇧🇷", "Japão": "🇯🇵", "Costa do Marfim": "🇨🇮", "Noruega": "🇳🇴",
+  "México": "🇲🇽", "Equador": "🇪🇨", "Inglaterra": "🏴", "RD Congo": "🇨🇩",
+  "Portugal": "🇵🇹", "Croácia": "🇭🇷", "Espanha": "🇪🇸", "Áustria": "🇦🇹",
+  "Estados Unidos": "🇺🇸", "Bósnia-Herzegovina": "🇧🇦", "Bélgica": "🇧🇪", "Senegal": "🇸🇳",
+  "Argentina": "🇦🇷", "Cabo Verde": "🇨🇻", "Austrália": "🇦🇺", "Egito": "🇪🇬",
+  "Suíça": "🇨🇭", "Argélia": "🇩🇿", "Colômbia": "🇨🇴", "Gana": "🇬🇭",
+};
+
+function teamLabel(name) {
+  if (!name) return "";
+  const flag = FLAGS[name];
+  return flag ? `${flag} ${name}` : name;
+}
+
+/* ---------- 1c. TOAST (aviso rápido no canto do ecrã) ---------- */
+
+function showToast(msg) {
+  const toast = el("div", { class: "toast" }, msg);
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add("show"));
+  setTimeout(() => {
+    toast.classList.remove("show");
+    setTimeout(() => toast.remove(), 300);
+  }, 2200);
+}
+
 /* ---------- 2. ESTADO LOCAL ---------- */
 
 const state = {
@@ -624,8 +655,8 @@ function renderGameCard(game) {
   const kickoffPassed = !locked && game.kickoff && new Date(game.kickoff).getTime() <= Date.now() && !hasLateException;
 
   const teamsRow = el("div", { class: "teams-row" });
-  const teamABtn = el("div", { class: pickClass("A") }, game.teamA);
-  const teamBBtn = el("div", { class: pickClass("B") }, game.teamB);
+  const teamABtn = el("div", { class: pickClass("A") }, teamLabel(game.teamA));
+  const teamBBtn = el("div", { class: pickClass("B") }, teamLabel(game.teamB));
 
   function pickClass(side) {
     let cls = "team-pick";
@@ -661,7 +692,7 @@ function renderGameCard(game) {
       const modeCorrect = myPick.mode === result.mode;
       const exactCorrect = Number(myPick.scoreA) === Number(result.scoreA) &&
                             Number(myPick.scoreB) === Number(result.scoreB);
-      const myWinnerName = myPick.winner === "A" ? game.teamA : game.teamB;
+      const myWinnerName = teamLabel(myPick.winner === "A" ? game.teamA : game.teamB);
       const pts = calcPoints(myPick, result);
 
       const feedback = el("div", { class: "feedback-box" });
@@ -691,6 +722,10 @@ function renderGameCard(game) {
      O vencedor é deduzido automaticamente do resultado que escreves.
      Só podes escolher manualmente quem ganha quando o resultado fica
      empatado — nesse caso só pode ter sido decidido nos pénaltis. */
+  if (game.kickoff && !hasLateException) {
+    card.appendChild(renderCountdown(game.kickoff));
+  }
+
   const scoreRow = el("div", { class: "score-row" });
   const scoreA = el("input", { type: "number", min: "0", placeholder: "golos " + game.teamA, value: local.scoreA });
   const scoreB = el("input", { type: "number", min: "0", placeholder: "golos " + game.teamB, value: local.scoreB });
@@ -761,6 +796,7 @@ function renderGameCard(game) {
       scoreB: Number(local.scoreB),
       mode: local.mode,
     });
+    showToast(`✅ aposta guardada: ${teamLabel(game.teamA)} ${local.scoreA} - ${local.scoreB} ${teamLabel(game.teamB)}`);
   };
   card.appendChild(saveBtn);
 
@@ -776,6 +812,37 @@ function feedbackRow(label, value, correct) {
 
 function modeLabel(mode) {
   return { regular: "tempo regular", et: "prolongamento", pens: "grandes penalidades" }[mode] || mode;
+}
+
+// Contagem decrescente até as apostas fecharem (hora de início do jogo).
+// Atualiza-se sozinha a cada segundo sem precisar de re-renderizar o
+// resto da página (evita perder o que a pessoa está a escrever).
+function renderCountdown(kickoffIso) {
+  const pill = el("span", { class: "countdown-pill" }, "");
+  let timer = null;
+
+  function update() {
+    if (timer !== null && !document.body.contains(pill)) { clearInterval(timer); return; }
+    const diff = new Date(kickoffIso).getTime() - Date.now();
+    if (diff <= 0) {
+      pill.textContent = "⏱️ as apostas vão fechar a qualquer momento";
+      if (timer !== null) clearInterval(timer);
+      return;
+    }
+    const totalMin = Math.floor(diff / 60000);
+    const days = Math.floor(totalMin / 1440);
+    const hours = Math.floor((totalMin % 1440) / 60);
+    const mins = totalMin % 60;
+    let txt = "⏱️ fecha em ";
+    if (days > 0) txt += `${days}d ${hours}h`;
+    else if (hours > 0) txt += `${hours}h ${mins}min`;
+    else txt += `${mins}min`;
+    pill.textContent = txt;
+  }
+
+  update();
+  timer = setInterval(update, 1000);
+  return el("div", { style: "text-align:center;margin-bottom:8px" }, pill);
 }
 
 /* --- 11.6 Classificação --- */
@@ -804,10 +871,13 @@ function renderLeaderboard() {
     return wrap;
   }
 
+  const myId = normalizeCode(state.account.name);
+
   ranking.forEach(([playerId, info], i) => {
-    const row = el("div", { class: "leaderboard-row clickable" });
+    const isMe = playerId === myId;
+    const row = el("div", { class: "leaderboard-row clickable" + (isMe ? " own-row" : "") });
     row.appendChild(el("span", { class: "rank" }, `${i + 1}.`));
-    row.appendChild(el("span", { style: "flex:1" }, info.name));
+    row.appendChild(el("span", { style: "flex:1" }, isMe ? `${info.name} (tu)` : info.name));
     row.appendChild(el("span", { class: "pts" }, `${info.pts} pts`));
     row.onclick = () => {
       state.expandedPlayer = state.expandedPlayer === playerId ? null : playerId;
@@ -844,12 +914,12 @@ function renderPlayerPicksDetail(data) {
     const pick = picks[game.id];
     const line = el("div", { class: "player-pick-line" });
     if (!pick) {
-      line.appendChild(el("span", { class: "pending-msg" }, `${game.teamA} vs ${game.teamB}: sem aposta`));
+      line.appendChild(el("span", { class: "pending-msg" }, `${teamLabel(game.teamA)} vs ${teamLabel(game.teamB)}: sem aposta`));
     } else {
-      const winnerName = pick.winner === "A" ? game.teamA : game.teamB;
+      const winnerName = teamLabel(pick.winner === "A" ? game.teamA : game.teamB);
       const pts = calcPoints(pick, game.result);
       line.appendChild(el("span", {},
-        `${game.teamA} vs ${game.teamB}: apostou em ${winnerName}, ${pick.scoreA}-${pick.scoreB} (${modeLabel(pick.mode)})`));
+        `${teamLabel(game.teamA)} vs ${teamLabel(game.teamB)}: apostou em ${winnerName}, ${pick.scoreA}-${pick.scoreB} (${modeLabel(pick.mode)})`));
       line.appendChild(el("span", { class: "points-pill" }, `${pts} pts`));
     }
     box.appendChild(line);
@@ -888,9 +958,9 @@ function renderAdminGameRow(game) {
 
   if (game.status === "locked" && game.result) {
     const r = game.result;
-    const winnerName = r.winner === "A" ? game.teamA : game.teamB;
+    const winnerName = teamLabel(r.winner === "A" ? game.teamA : game.teamB);
     row.appendChild(
-      el("span", {}, `${game.teamA} ${r.scoreA} - ${r.scoreB} ${game.teamB} · venceu ${winnerName} (${modeLabel(r.mode)})`)
+      el("span", {}, `${teamLabel(game.teamA)} ${r.scoreA} - ${r.scoreB} ${teamLabel(game.teamB)} · venceu ${winnerName} (${modeLabel(r.mode)})`)
     );
     const unlockBtn = el("button", { class: "small danger" }, "🔓 Corrigir");
     unlockBtn.onclick = () => unlockResult(game.id);
@@ -900,7 +970,7 @@ function renderAdminGameRow(game) {
 
   // jogo aberto — admin pode confirmar resultado real
   const form = el("div", { style: "display:flex;gap:6px;align-items:center;flex-wrap:wrap;width:100%" });
-  form.appendChild(el("span", { style: "min-width:160px" }, `${game.teamA} vs ${game.teamB}`));
+  form.appendChild(el("span", { style: "min-width:160px" }, `${teamLabel(game.teamA)} vs ${teamLabel(game.teamB)}`));
 
   const winnerSelect = el("select", { style: "width:auto" }, [
     el("option", { value: "A" }, game.teamA),
@@ -979,7 +1049,6 @@ async function enterRoom(code) {
   state.room = code;
   const host = await getRoomHost(code);
   state.isHost = host === state.account.name;
-  await seedRoomGames(code); // garante que a sala tem os 31 jogos, mesmo se foram apagados
   attachRoomListeners();
   render();
 }
