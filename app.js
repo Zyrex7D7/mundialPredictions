@@ -199,7 +199,30 @@ function clearSessionAccount() {
    7. SALAS (coleção "rooms", subcoleção "games" e "predictions")
    ==================================================================== */
 
-async function createOrEnterRoom(rawCode, account) {
+// Cria uma sala NOVA. Dá erro se já existir uma sala com este código,
+// para evitar entrar sem querer numa sala errada por engano de digitação.
+async function createRoom(rawCode, account) {
+  const code = normalizeCode(rawCode);
+  if (!code) throw new Error("Escreve um código de sala válido.");
+
+  const roomRef = db.collection("rooms").doc(code);
+  const roomSnap = await roomRef.get();
+
+  if (roomSnap.exists) {
+    throw new Error(`Já existe uma sala com o código "${code}". Se é a tua, usa o botão "Entrar numa sala existente".`);
+  }
+
+  await roomRef.set({ host: account.name, createdAt: Date.now() });
+  await seedRoomGames(code);
+
+  saveSessionRoom(code);
+  return code;
+}
+
+// Entra numa sala que já existe. Dá erro se o código não corresponder
+// a nenhuma sala — assim ninguém cria salas novas por engano ao
+// escrever mal o código que lhe deram.
+async function joinRoom(rawCode) {
   const code = normalizeCode(rawCode);
   if (!code) throw new Error("Escreve um código de sala válido.");
 
@@ -207,9 +230,7 @@ async function createOrEnterRoom(rawCode, account) {
   const roomSnap = await roomRef.get();
 
   if (!roomSnap.exists) {
-    // sala nova: quem a cria fica host
-    await roomRef.set({ host: account.name, createdAt: Date.now() });
-    await seedRoomGames(code);
+    throw new Error(`Não existe nenhuma sala com o código "${code}". Confirma o código com quem te convidou.`);
   }
 
   saveSessionRoom(code);
@@ -422,16 +443,29 @@ function renderRoomChoiceView() {
   card.appendChild(codeInput);
 
   const btnRow = el("div", { style: "display:flex;gap:10px;margin-top:16px" });
-  const enterBtn = el("button", { class: "primary", style: "flex:1" }, "Entrar / criar sala");
-  enterBtn.onclick = async () => {
+
+  const joinBtn = el("button", { class: "primary", style: "flex:1" }, "Entrar numa sala existente");
+  joinBtn.onclick = async () => {
     try {
-      const code = await createOrEnterRoom(codeInput.value, state.account);
+      const code = await joinRoom(codeInput.value);
       await enterRoom(code);
     } catch (e) {
       showError(card, e.message);
     }
   };
-  btnRow.appendChild(enterBtn);
+
+  const createBtn = el("button", { style: "flex:1" }, "Criar sala nova");
+  createBtn.onclick = async () => {
+    try {
+      const code = await createRoom(codeInput.value, state.account);
+      await enterRoom(code);
+    } catch (e) {
+      showError(card, e.message);
+    }
+  };
+
+  btnRow.appendChild(joinBtn);
+  btnRow.appendChild(createBtn);
   card.appendChild(btnRow);
 
   appEl.appendChild(card);
