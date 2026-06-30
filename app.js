@@ -37,6 +37,51 @@ const R32_PAIRS = [
   ["Colômbia", "Gana"],
 ];
 
+// Data/hora de início de cada jogo (usado para FECHAR as apostas
+// automaticamente assim que o jogo começar — depois disto ninguém
+// consegue apostar nesse jogo, só ver o formulário fechado).
+// Horas no fuso de Portugal continental (verão = +01:00).
+// Preenchido a partir do Jogo 77 (França x Suécia) em diante, como
+// pedido — os jogos anteriores a esse (73, 74, 75, 76, 78) já têm
+// resultado e ficam por preencher por agora.
+const KICKOFFS = {
+  // --- Fase de 32 (a partir do jogo 77) ---
+  r32_2:  "2026-06-30T22:00:00+01:00", // Jogo 77 - França x Suécia
+  r32_7:  "2026-07-01T02:00:00+01:00", // Jogo 79 - México x Equador
+  r32_8:  "2026-07-01T17:00:00+01:00", // Jogo 80 - Inglaterra x RD Congo
+  r32_12: "2026-07-01T21:00:00+01:00", // Jogo 82 - Bélgica x Senegal
+  r32_11: "2026-07-02T01:00:00+01:00", // Jogo 81 - Estados Unidos x Bósnia e Herzegovina
+  r32_10: "2026-07-02T20:00:00+01:00", // Jogo 84 - Espanha x Áustria
+  r32_9:  "2026-07-03T00:00:00+01:00", // Jogo 83 - Portugal x Croácia
+  r32_15: "2026-07-03T04:00:00+01:00", // Jogo 85 - Suíça x Argélia
+  r32_14: "2026-07-03T19:00:00+01:00", // Jogo 88 - Austrália x Egito
+  r32_13: "2026-07-03T23:00:00+01:00", // Jogo 86 - Argentina x Cabo Verde
+  r32_16: "2026-07-04T02:30:00+01:00", // Jogo 87 - Colômbia x Gana
+
+  // --- Oitavos de final ---
+  r16_2: "2026-07-04T18:00:00+01:00", // Jogo 90 - Canadá x Marrocos
+  r16_1: "2026-07-04T22:00:00+01:00", // Jogo 89 - Paraguai x Vencedor jogo 77
+  r16_3: "2026-07-05T21:00:00+01:00", // Jogo 91 - Brasil x Noruega
+  r16_4: "2026-07-06T01:00:00+01:00", // Jogo 92 - Vencedor jogo 79 x Vencedor jogo 80
+  r16_5: "2026-07-06T20:00:00+01:00", // Jogo 93 - Vencedor jogo 83 x Vencedor jogo 84
+  r16_6: "2026-07-07T01:00:00+01:00", // Jogo 94 - Vencedor jogo 81 x Vencedor jogo 82
+  r16_7: "2026-07-07T17:00:00+01:00", // Jogo 95 - Vencedor jogo 86 x Vencedor jogo 88
+  r16_8: "2026-07-07T21:00:00+01:00", // Jogo 96 - Vencedor jogo 85 x Vencedor jogo 87
+
+  // --- Quartos de final ---
+  qf_1: "2026-07-09T21:00:00+01:00", // Jogo 97 - Vencedor jogo 89 x Vencedor jogo 90
+  qf_3: "2026-07-10T20:00:00+01:00", // Jogo 98 - Vencedor jogo 93 x Vencedor jogo 94
+  qf_2: "2026-07-12T22:00:00+01:00", // Jogo 99 - Vencedor jogo 91 x Vencedor jogo 92
+  qf_4: "2026-07-13T02:00:00+01:00", // Jogo 100 - Vencedor jogo 95 x Vencedor jogo 96
+
+  // --- Meias-finais ---
+  sf_1: "2026-07-14T20:00:00+01:00", // Jogo 101 - Vencedor jogo 97 x Vencedor jogo 98
+  sf_2: "2026-07-15T20:00:00+01:00", // Jogo 102 - Vencedor jogo 99 x Vencedor jogo 100
+
+  // --- Final ---
+  final_1: "2026-07-19T20:00:00+01:00", // Jogo 104 - Vencedor jogo 101 x Vencedor jogo 102
+};
+
 /* ---------- 2. ESTADO LOCAL ---------- */
 
 const state = {
@@ -48,6 +93,7 @@ const state = {
   unsubGames: null,
   unsubPreds: null,
   adminOpen: false,
+  expandedPlayer: null,  // id do jogador cujas apostas estão abertas na classificação
 };
 
 const ROUNDS = ["r32", "r16", "qf", "sf", "final"];
@@ -108,6 +154,8 @@ function buildEmptyBracket() {
       sourceA: null, sourceB: null,
       status: "open",
       result: null,
+      kickoff: KICKOFFS[id] || null,
+      lateExceptions: {},  // { [idDoJogador]: true } — autorizações do host para apostar depois da hora
     };
   });
 
@@ -124,6 +172,8 @@ function buildEmptyBracket() {
         sourceA, sourceB,
         status: "pending",
         result: null,
+        kickoff: KICKOFFS[id] || null,
+        lateExceptions: {},
       };
     }
     return count;
@@ -344,6 +394,22 @@ async function unlockResult(gameId) {
   await gamesCol.doc(gameId).update({ status: "open", result: null });
 }
 
+// Permite que o host autorize UMA pessoa específica a apostar mesmo
+// depois da hora de início (ex: esqueceu-se). Não reabre o jogo para
+// mais ninguém — só essa pessoa deixa de ver o formulário fechado.
+async function grantLateException(gameId, playerName) {
+  const pid = normalizeCode(playerName);
+  if (!pid) throw new Error("Escreve o nome do jogador.");
+  const gamesCol = db.collection("rooms").doc(state.room).collection("games");
+  await gamesCol.doc(gameId).update({ [`lateExceptions.${pid}`]: true });
+  return pid;
+}
+
+async function revokeLateException(gameId, playerId) {
+  const gamesCol = db.collection("rooms").doc(state.room).collection("games");
+  await gamesCol.doc(gameId).update({ [`lateExceptions.${playerId}`]: firebase.firestore.FieldValue.delete() });
+}
+
 /* ====================================================================
    10. LISTENERS EM TEMPO REAL
    ==================================================================== */
@@ -553,34 +619,25 @@ function renderGameCard(game) {
   let local = myPick ? { ...myPick } : { winner: null, scoreA: "", scoreB: "", mode: "regular" };
   const locked = game.status === "locked";
   const result = game.result;
+  const myId = normalizeCode(state.account.name);
+  const hasLateException = !!(game.lateExceptions && game.lateExceptions[myId]);
+  const kickoffPassed = !locked && game.kickoff && new Date(game.kickoff).getTime() <= Date.now() && !hasLateException;
 
   const teamsRow = el("div", { class: "teams-row" });
-  const teamABtn = el(
-    "div",
-    { class: pickClass("A") },
-    game.teamA
-  );
-  const teamBBtn = el(
-    "div",
-    { class: pickClass("B") },
-    game.teamB
-  );
+  const teamABtn = el("div", { class: pickClass("A") }, game.teamA);
+  const teamBBtn = el("div", { class: pickClass("B") }, game.teamB);
 
   function pickClass(side) {
     let cls = "team-pick";
     if (locked && result) {
       cls += result.winner === side ? " winner" : " loser";
+      if (myPick && myPick.winner === side) {
+        cls += result.winner === side ? " my-pick-correct" : " my-pick-wrong";
+      }
     } else if (local.winner === side) {
       cls += " selected";
     }
     return cls;
-  }
-
-  if (!locked) {
-    teamABtn.style.cursor = "pointer";
-    teamBBtn.style.cursor = "pointer";
-    teamABtn.onclick = () => { local.winner = "A"; refreshTeamClasses(); };
-    teamBBtn.onclick = () => { local.winner = "B"; refreshTeamClasses(); };
   }
   function refreshTeamClasses() {
     teamABtn.className = pickClass("A");
@@ -592,13 +649,27 @@ function renderGameCard(game) {
   teamsRow.appendChild(teamBBtn);
   card.appendChild(teamsRow);
 
+  /* ---- jogo já confirmado: mostra resultado real + feedback verde/vermelho ---- */
   if (locked) {
     card.appendChild(
       el("p", { style: "text-align:center;font-size:13px;color:var(--text-dim)" },
         `Resultado real: ${result.scoreA} - ${result.scoreB} (${modeLabel(result.mode)})`)
     );
+
     if (myPick) {
+      const winnerCorrect = myPick.winner === result.winner;
+      const modeCorrect = myPick.mode === result.mode;
+      const exactCorrect = Number(myPick.scoreA) === Number(result.scoreA) &&
+                            Number(myPick.scoreB) === Number(result.scoreB);
+      const myWinnerName = myPick.winner === "A" ? game.teamA : game.teamB;
       const pts = calcPoints(myPick, result);
+
+      const feedback = el("div", { class: "feedback-box" });
+      feedback.appendChild(feedbackRow("Quem ganha", myWinnerName, winnerCorrect));
+      feedback.appendChild(feedbackRow("Fase (regular / prolong. / pénaltis)", modeLabel(myPick.mode), modeCorrect));
+      feedback.appendChild(feedbackRow("Resultado exato", `${myPick.scoreA} - ${myPick.scoreB}`, exactCorrect));
+      card.appendChild(feedback);
+
       card.appendChild(
         el("div", { style: "text-align:center" },
           el("span", { class: "points-pill" }, `a tua aposta valeu ${pts} pontos`))
@@ -609,29 +680,81 @@ function renderGameCard(game) {
     return card;
   }
 
-  // jogo aberto — formulário de aposta
+  /* ---- apostas fechadas porque o jogo já começou (e ainda sem resultado) ---- */
+  if (kickoffPassed) {
+    card.appendChild(el("p", { class: "pending-msg", style: "text-align:center" },
+      "⏱️ as apostas fecharam — o jogo já começou. assim que o resultado for confirmado vês aqui como te saíste."));
+    return card;
+  }
+
+  /* ---- jogo aberto — formulário de aposta ----
+     O vencedor é deduzido automaticamente do resultado que escreves.
+     Só podes escolher manualmente quem ganha quando o resultado fica
+     empatado — nesse caso só pode ter sido decidido nos pénaltis. */
   const scoreRow = el("div", { class: "score-row" });
   const scoreA = el("input", { type: "number", min: "0", placeholder: "golos " + game.teamA, value: local.scoreA });
   const scoreB = el("input", { type: "number", min: "0", placeholder: "golos " + game.teamB, value: local.scoreB });
-  scoreA.oninput = () => { local.scoreA = scoreA.value; };
-  scoreB.oninput = () => { local.scoreB = scoreB.value; };
+
+  if (hasLateException) {
+    card.appendChild(el("p", { class: "pending-msg" }, "⏱️ o jogo já começou, mas o host autorizou-te a apostar na mesma."));
+  }
+
+  const modeSelect = el("select", {}, [
+    el("option", { value: "regular" }, "Tempo regular"),
+    el("option", { value: "et" }, "Prolongamento"),
+    el("option", { value: "pens" }, "Grandes penalidades"),
+  ]);
+  const pensOption = modeSelect.querySelector('option[value="pens"]');
+
+  const hint = el("p", { class: "pending-msg", style: "margin:6px 0 0" }, "");
+
+  function recomputeFromScore() {
+    if (local.scoreA === "" || local.scoreB === "") {
+      local.winner = null;
+      hint.textContent = "";
+      return;
+    }
+    const a = Number(local.scoreA);
+    const b = Number(local.scoreB);
+    if (a === b) {
+      // empate no resultado só é possível se foi a pénaltis
+      local.mode = "pens";
+      if (local.winner !== "A" && local.winner !== "B") local.winner = null;
+      hint.textContent = "empate → só pode ter sido decidido nos pénaltis. escolhe em cima quem venceu.";
+    } else {
+      local.winner = a > b ? "A" : "B";
+      if (local.mode === "pens") local.mode = "et";
+      hint.textContent = "vencedor escolhido automaticamente pelo resultado.";
+    }
+  }
+
+  function updateInteractivity() {
+    const tied = local.scoreA !== "" && local.scoreB !== "" && Number(local.scoreA) === Number(local.scoreB);
+    teamABtn.style.cursor = tied ? "pointer" : "default";
+    teamBBtn.style.cursor = tied ? "pointer" : "default";
+    teamABtn.onclick = tied ? () => { local.winner = "A"; refreshTeamClasses(); } : null;
+    teamBBtn.onclick = tied ? () => { local.winner = "B"; refreshTeamClasses(); } : null;
+    pensOption.style.display = tied ? "" : "none";
+    modeSelect.disabled = tied;
+    modeSelect.value = local.mode;
+    refreshTeamClasses();
+  }
+
+  scoreA.oninput = () => { local.scoreA = scoreA.value; recomputeFromScore(); updateInteractivity(); };
+  scoreB.oninput = () => { local.scoreB = scoreB.value; recomputeFromScore(); updateInteractivity(); };
+
   scoreRow.appendChild(scoreA);
   scoreRow.appendChild(scoreB);
   card.appendChild(scoreRow);
-
-  const modeSelect = el("select", {}, [
-    el("option", { value: "regular", selected: local.mode === "regular" }, "Tempo regular"),
-    el("option", { value: "et", selected: local.mode === "et" }, "Prolongamento"),
-    el("option", { value: "pens", selected: local.mode === "pens" }, "Grandes penalidades"),
-  ]);
-  modeSelect.value = local.mode;
-  modeSelect.onchange = () => { local.mode = modeSelect.value; };
   card.appendChild(modeSelect);
+  card.appendChild(hint);
+
+  updateInteractivity();
 
   const saveBtn = el("button", { class: "primary", style: "width:100%;margin-top:10px" }, myPick ? "Atualizar aposta" : "Guardar aposta");
   saveBtn.onclick = async () => {
-    if (!local.winner) return showError(card, "Escolhe primeiro quem ganha.");
     if (local.scoreA === "" || local.scoreB === "") return showError(card, "Preenche o resultado.");
+    if (!local.winner) return showError(card, "Resultado empatado: escolhe quem venceu nos pénaltis.");
     await savePick(game.id, {
       winner: local.winner,
       scoreA: Number(local.scoreA),
@@ -644,6 +767,13 @@ function renderGameCard(game) {
   return card;
 }
 
+function feedbackRow(label, value, correct) {
+  return el("div", { class: "feedback-row " + (correct ? "correct" : "wrong") }, [
+    el("span", {}, label),
+    el("span", { class: "feedback-value" }, `${value} ${correct ? "✅" : "❌"}`),
+  ]);
+}
+
 function modeLabel(mode) {
   return { regular: "tempo regular", et: "prolongamento", pens: "grandes penalidades" }[mode] || mode;
 }
@@ -653,6 +783,7 @@ function modeLabel(mode) {
 function renderLeaderboard() {
   const wrap = el("div", { class: "card section-gap" });
   wrap.appendChild(el("h2", {}, "🏅 Classificação"));
+  wrap.appendChild(el("p", { style: "margin-top:-6px" }, "clica num nome para ver as apostas dessa pessoa nos jogos já confirmados."));
 
   const totals = {};
   Object.entries(state.predictions).forEach(([playerId, data]) => {
@@ -663,27 +794,68 @@ function renderLeaderboard() {
         total += calcPoints(pick, game.result);
       }
     });
-    totals[data.displayName || playerId] = total;
+    totals[playerId] = { name: data.displayName || playerId, pts: total };
   });
 
-  const ranking = Object.entries(totals).sort((a, b) => b[1] - a[1]);
+  const ranking = Object.entries(totals).sort((a, b) => b[1].pts - a[1].pts);
 
   if (ranking.length === 0) {
     wrap.appendChild(el("p", {}, "Ainda ninguém fez previsões nesta sala."));
     return wrap;
   }
 
-  ranking.forEach(([name, pts], i) => {
-    wrap.appendChild(
-      el("div", { class: "leaderboard-row" }, [
-        el("span", { class: "rank" }, `${i + 1}.`),
-        el("span", { style: "flex:1" }, name),
-        el("span", { class: "pts" }, `${pts} pts`),
-      ])
-    );
+  ranking.forEach(([playerId, info], i) => {
+    const row = el("div", { class: "leaderboard-row clickable" });
+    row.appendChild(el("span", { class: "rank" }, `${i + 1}.`));
+    row.appendChild(el("span", { style: "flex:1" }, info.name));
+    row.appendChild(el("span", { class: "pts" }, `${info.pts} pts`));
+    row.onclick = () => {
+      state.expandedPlayer = state.expandedPlayer === playerId ? null : playerId;
+      render();
+    };
+    wrap.appendChild(row);
+
+    if (state.expandedPlayer === playerId) {
+      wrap.appendChild(renderPlayerPicksDetail(state.predictions[playerId]));
+    }
   });
 
   return wrap;
+}
+
+// Mostra as apostas de um jogador, mas só para jogos já confirmados —
+// enquanto um jogo não tem resultado real ninguém vê a aposta de
+// ninguém (a própria pessoa continua a ver sempre a sua, no cartão do
+// jogo lá em cima).
+function renderPlayerPicksDetail(data) {
+  const box = el("div", { class: "player-picks-detail" });
+  const picks = (data && data.picks) || {};
+
+  const lockedGames = Object.values(state.games)
+    .filter((g) => g.status === "locked")
+    .sort((a, b) => ROUNDS.indexOf(a.round) - ROUNDS.indexOf(b.round) || a.order - b.order);
+
+  if (lockedGames.length === 0) {
+    box.appendChild(el("p", { class: "pending-msg" }, "ainda nenhum jogo desta sala tem resultado confirmado."));
+    return box;
+  }
+
+  lockedGames.forEach((game) => {
+    const pick = picks[game.id];
+    const line = el("div", { class: "player-pick-line" });
+    if (!pick) {
+      line.appendChild(el("span", { class: "pending-msg" }, `${game.teamA} vs ${game.teamB}: sem aposta`));
+    } else {
+      const winnerName = pick.winner === "A" ? game.teamA : game.teamB;
+      const pts = calcPoints(pick, game.result);
+      line.appendChild(el("span", {},
+        `${game.teamA} vs ${game.teamB}: apostou em ${winnerName}, ${pick.scoreA}-${pick.scoreB} (${modeLabel(pick.mode)})`));
+      line.appendChild(el("span", { class: "points-pill" }, `${pts} pts`));
+    }
+    box.appendChild(line);
+  });
+
+  return box;
 }
 
 /* --- 11.7 Painel de administração --- */
@@ -754,8 +926,49 @@ function renderAdminGameRow(game) {
   form.appendChild(modeSelect);
   form.appendChild(confirmBtn);
   row.appendChild(form);
+  row.appendChild(renderLateExceptionsBox(game));
 
   return row;
+}
+
+// Caixa para o host autorizar (ou retirar autorização a) jogadores
+// específicos a apostar depois da hora de início do jogo.
+function renderLateExceptionsBox(game) {
+  const box = el("div", { style: "width:100%;margin-top:6px;padding-top:8px;border-top:1px dashed var(--navy-600)" });
+
+  const exceptions = Object.keys(game.lateExceptions || {});
+  if (exceptions.length > 0) {
+    const list = el("div", { style: "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px" });
+    exceptions.forEach((pid) => {
+      const name = state.predictions[pid]?.displayName || pid;
+      const pill = el("span", { class: "points-pill", style: "display:flex;align-items:center;gap:6px" }, [
+        el("span", {}, `⏱️ ${name} pode apostar atrasado`),
+      ]);
+      const removeBtn = el("button", { class: "small danger", style: "padding:2px 8px" }, "x");
+      removeBtn.onclick = () => revokeLateException(game.id, pid);
+      pill.appendChild(removeBtn);
+      list.appendChild(pill);
+    });
+    box.appendChild(list);
+  }
+
+  const grantRow = el("div", { style: "display:flex;gap:6px;align-items:center;flex-wrap:wrap" });
+  grantRow.appendChild(el("span", { style: "font-size:12px;color:var(--text-dim)" }, "esqueceu-se de apostar?"));
+  const nameInput = el("input", { type: "text", placeholder: "nome do jogador", style: "width:160px" });
+  const grantBtn = el("button", { class: "small" }, "permitir aposta atrasada");
+  grantBtn.onclick = async () => {
+    try {
+      await grantLateException(game.id, nameInput.value);
+      nameInput.value = "";
+    } catch (e) {
+      showError(box, e.message);
+    }
+  };
+  grantRow.appendChild(nameInput);
+  grantRow.appendChild(grantBtn);
+  box.appendChild(grantRow);
+
+  return box;
 }
 
 /* ====================================================================
