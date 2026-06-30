@@ -766,6 +766,7 @@ async function enterRoom(code) {
   state.room = code;
   const host = await getRoomHost(code);
   state.isHost = host === state.account.name;
+  await seedRoomGames(code); // garante que a sala tem os 31 jogos, mesmo se foram apagados
   attachRoomListeners();
   render();
 }
