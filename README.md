@@ -5,7 +5,6 @@ pontos por acertar quem passa, como passa (tempo regular / prolongamento
 / pénaltis) e o resultado exato. Tudo em HTML + CSS + JS puro, dados
 guardados no Firebase Firestore (gratuito) para todos verem a mesma
 classificação em tempo real.
-Feito com AI
 
 ```
 index.html          → estrutura da página
@@ -123,14 +122,50 @@ etc.) sem misturar com a sala a sério dos teus amigos.
   tiver as duas equipas reais definidas (ou seja, quando os dois jogos
   anteriores estiverem confirmados).
 
+### Como se aposta (vencedor automático)
+- Cada pessoa escreve só o **resultado** (golos de cada equipa). Quem
+  ganha é calculado automaticamente a partir disso — não dá para
+  escolher um vencedor que contradiga o resultado escrito.
+- Como é fase a eliminar, um **empate só é possível se foi decidido nos
+  pénaltis**. Por isso, só quando o resultado fica empatado é que
+  aparece a opção de escolher manualmente quem venceu (e a fase fica
+  automaticamente em "grandes penalidades").
+- **Não é possível apostar em nome de outra pessoa.** Cada conta só
+  consegue guardar/alterar a sua própria aposta — não há forma de um
+  jogador editar a aposta de outro, mesmo a partir do código.
+
+### Fecho automático das apostas (à hora do jogo)
+- Cada jogo pode ter uma hora de início definida na constante
+  `KICKOFFS`, no topo do `app.js`. Assim que essa hora passar, o
+  formulário de aposta desse jogo fecha-se sozinho (mesmo que o host
+  ainda não tenha confirmado o resultado) — ninguém consegue apostar
+  depois de o jogo já ter começado, mesmo vendo o resultado parcial ao
+  vivo.
+- Enquanto não preencheres `KICKOFFS`, um jogo só deixa de aceitar
+  apostas quando o host confirma o resultado (como acontecia antes).
+- Isto não impede 100% batota técnica (alguém com conhecimentos de
+  programação podia em teoria contornar o site), mas resolve o caso
+  normal: ninguém vê o formulário de aposta depois da hora de início.
+
+### Ver as apostas dos amigos
+- Na classificação, clica no nome de qualquer jogador para abrir a
+  lista das apostas dele — mas só aparecem os jogos que **já têm
+  resultado confirmado**. Enquanto um jogo ainda não foi confirmado
+  (mesmo que já tenha começado ou até já tenha terminado mas o host
+  ainda não meteu o resultado), a aposta de ninguém aparece a mais
+  ninguém — só a tua própria, sempre, no cartão do jogo.
+
 ### Pontos (cumulativos — só contam se acertares no nível anterior)
 
-| Acertaste em...                        | Pontos |
-|-----------------------------------------|:------:|
-| Quem passa (vencedor)                   | +2     |
-| → e que foi em prolongamento            | +2     |
-| → e que foi em grandes penalidades      | +3     |
-| → e no resultado exato                  | +5     |
+| Acertaste em...                                          | Pontos |
+|-----------------------------------------------------------|:------:|
+| Quem passa (vencedor)                                      | +2     |
+| → e a fase em que se decidiu (regular / prolong. / pénaltis, tanto faz qual) | +3     |
+| → e no resultado exato                                     | +5     |
+
+A fase vale sempre os mesmos 3 pontos, seja tempo regular,
+prolongamento ou grandes penalidades — não há diferença entre elas,
+só interessa se acertaste a fase certa ou não.
 
 Máximo por jogo: **10 pontos**. Para mudar estes valores, edita o topo
 do `app.js`:
@@ -138,8 +173,7 @@ do `app.js`:
 ```js
 const POINTS = {
   advance: 2,
-  et: 2,
-  pens: 3,
+  phase: 3,
   exact: 5,
 };
 ```
