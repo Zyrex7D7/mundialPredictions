@@ -5,6 +5,7 @@ pontos por acertar quem passa, como passa (tempo regular / prolongamento
 / pénaltis) e o resultado exato. Tudo em HTML + CSS + JS puro, dados
 guardados no Firebase Firestore (gratuito) para todos verem a mesma
 classificação em tempo real.
+Feito com AI
 
 ```
 index.html          → estrutura da página
