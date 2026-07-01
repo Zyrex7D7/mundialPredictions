@@ -84,6 +84,27 @@ const KICKOFFS = {
   final_1: "2026-07-19T20:00:00+01:00", // Jogo 104 - Vencedor jogo 101 x Vencedor jogo 102
 };
 
+// Jogos que já tinham decorrido/acabado antes de este site sequer
+// existir — ninguém teve oportunidade justa de apostar antes da hora.
+// Estes ficam automaticamente EXCLUÍDOS da classificação (não somam
+// pontos a ninguém) em qualquer sala NOVA criada a partir de agora —
+// mas o resultado real continua visível e conta para o bracket avançar
+// normalmente. O host pode sempre reverter isto no painel de admin
+// (botão "↩️ voltar a contar"), jogo a jogo.
+//
+// ⚠️ Isto só se aplica a salas criadas de agora em diante. Numa sala
+// que já exista no Firebase, os jogos já lá estão gravados com
+// scoreExcluded: false — tens de ir ao painel de admin e clicar
+// "🚫 tirar pontos" manualmente nesses jogos (uma vez, fica guardado).
+const DEFAULT_SCORE_EXCLUDED = [
+  "r32_3", // Jogo 73 - África do Sul x Canadá
+  "r32_1", // Jogo 74 - Alemanha x Paraguai
+  "r32_5", // Jogo 76 - Brasil x Japão
+  "r32_4", // Jogo 75 - Holanda x Marrocos
+  "r32_6", // Jogo 78 - Costa do Marfim x Noruega
+  "r32_2", // Jogo 77 - França x Suécia
+];
+
 /* ---------- 1b. BANDEIRAS ----------
    Emojis de bandeira não funcionam bem no Windows (mostra "PY", "CO",
    etc. em vez da imagem) porque dependem da fonte do sistema. Por isso
@@ -210,7 +231,7 @@ function buildEmptyBracket() {
       result: null,
       kickoff: KICKOFFS[id] || null,
       lateExceptions: {},  // { [idDoJogador]: true } — autorizações do host para apostar depois da hora
-      scoreExcluded: false,  // true = jogo não conta para a classificação (ex: já tinha começado quando a sala foi criada)
+      scoreExcluded: DEFAULT_SCORE_EXCLUDED.includes(id),  // true = jogo não conta para a classificação (ex: já tinha começado quando a sala foi criada)
     };
   });
 
