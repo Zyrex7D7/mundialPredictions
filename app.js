@@ -40,11 +40,14 @@ const R32_PAIRS = [
 // automaticamente assim que o jogo começar — depois disto ninguém
 // consegue apostar nesse jogo, só ver o formulário fechado).
 // Horas no fuso de Portugal continental (verão = +01:00).
-// Preenchido a partir do Jogo 77 (França x Suécia) em diante, como
-// pedido — os jogos anteriores a esse (73, 74, 75, 76, 78) já têm
-// resultado e ficam por preencher por agora.
+// Calendário completo do Mundial 26, do Jogo 73 até à Final (Jogo 104).
 const KICKOFFS = {
-  // --- Fase de 32 (a partir do jogo 77) ---
+  // --- Fase de 32 ---
+  r32_3:  "2026-06-28T20:00:00+01:00", // Jogo 73 - África do Sul x Canadá
+  r32_1:  "2026-06-29T21:30:00+01:00", // Jogo 74 - Alemanha x Paraguai
+  r32_5:  "2026-06-29T18:00:00+01:00", // Jogo 76 - Brasil x Japão
+  r32_4:  "2026-06-30T02:00:00+01:00", // Jogo 75 - Holanda x Marrocos
+  r32_6:  "2026-06-30T18:00:00+01:00", // Jogo 78 - Costa do Marfim x Noruega
   r32_2:  "2026-06-30T22:00:00+01:00", // Jogo 77 - França x Suécia
   r32_7:  "2026-07-01T02:00:00+01:00", // Jogo 79 - México x Equador
   r32_8:  "2026-07-01T17:00:00+01:00", // Jogo 80 - Inglaterra x RD Congo
@@ -59,9 +62,9 @@ const KICKOFFS = {
 
   // --- Oitavos de final ---
   r16_2: "2026-07-04T18:00:00+01:00", // Jogo 90 - Canadá x Marrocos
-  r16_1: "2026-07-04T22:00:00+01:00", // Jogo 89 - Paraguai x Vencedor jogo 77
+  r16_1: "2026-07-04T22:00:00+01:00", // Jogo 89 - Paraguai x França
   r16_3: "2026-07-05T21:00:00+01:00", // Jogo 91 - Brasil x Noruega
-  r16_4: "2026-07-06T01:00:00+01:00", // Jogo 92 - Vencedor jogo 79 x Vencedor jogo 80
+  r16_4: "2026-07-06T01:00:00+01:00", // Jogo 92 - México x Inglaterra
   r16_5: "2026-07-06T20:00:00+01:00", // Jogo 93 - Vencedor jogo 83 x Vencedor jogo 84
   r16_6: "2026-07-07T01:00:00+01:00", // Jogo 94 - Vencedor jogo 81 x Vencedor jogo 82
   r16_7: "2026-07-07T17:00:00+01:00", // Jogo 95 - Vencedor jogo 86 x Vencedor jogo 88
@@ -211,13 +214,20 @@ function buildEmptyBracket() {
     };
   });
 
-  // Função genérica para gerar uma ronda seguinte a partir da anterior
-  function buildRound(roundId, prevRoundId, prevCount) {
-    const count = prevCount / 2;
+  // Função genérica para gerar uma ronda seguinte a partir da anterior,
+  // emparelhando jogos consecutivos (1+2, 3+4, ...). Isto funciona para
+  // Fase de 32 → Oitavos → Quartos, mas NÃO para Quartos → Meias: no
+  // calendário oficial do Mundial 26, a Meia 1 (Jogo 101) é o vencedor
+  // do Jogo 97 x vencedor do Jogo 98 — e esses correspondem a qf_1 e
+  // qf_3 (não qf_1 e qf_2). A Meia 2 (Jogo 102) é qf_2 x qf_4. Por isso
+  // as Meias usam um mapa de ligações explícito em vez do padrão
+  // genérico "1+2, 3+4".
+  function buildRound(roundId, prevRoundId, prevCount, explicitPairs) {
+    const count = explicitPairs ? explicitPairs.length : prevCount / 2;
     for (let i = 1; i <= count; i++) {
       const id = `${roundId}_${i}`;
-      const sourceA = `${prevRoundId}_${2 * i - 1}`;
-      const sourceB = `${prevRoundId}_${2 * i}`;
+      const sourceA = explicitPairs ? `${prevRoundId}_${explicitPairs[i - 1][0]}` : `${prevRoundId}_${2 * i - 1}`;
+      const sourceB = explicitPairs ? `${prevRoundId}_${explicitPairs[i - 1][1]}` : `${prevRoundId}_${2 * i}`;
       games[id] = {
         id, round: roundId, order: i,
         teamA: null, teamB: null,
@@ -235,7 +245,9 @@ function buildEmptyBracket() {
   let prevCount = 16;
   prevCount = buildRound("r16", "r32", prevCount);
   prevCount = buildRound("qf", "r16", prevCount);
-  prevCount = buildRound("sf", "qf", prevCount);
+  // Meias: ligações reais do calendário (Jogo101 = venc.97 x venc.98 = qf_1 x qf_3;
+  // Jogo102 = venc.99 x venc.100 = qf_2 x qf_4), não o padrão genérico 1+2 / 3+4.
+  prevCount = buildRound("sf", "qf", prevCount, [[1, 3], [2, 4]]);
   buildRound("final", "sf", prevCount);
 
   return games;
