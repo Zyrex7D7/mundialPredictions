@@ -10,8 +10,7 @@
 // se acertares no anterior (ver função calcPoints mais abaixo).
 const POINTS = {
   advance: 2,  // acertar quem passa (vencedor)
-  et: 2,       // + acertar que foi resolvido em prolongamento
-  pens: 3,     // + acertar que foi resolvido em grandes penalidades
+  phase: 3,    // + acertar a fase em que se decidiu (tempo regular / prolongamento / pénaltis) — vale sempre 3, seja qual for a fase
   exact: 5,    // + acertar o resultado exato
 };
 
@@ -82,23 +81,44 @@ const KICKOFFS = {
   final_1: "2026-07-19T20:00:00+01:00", // Jogo 104 - Vencedor jogo 101 x Vencedor jogo 102
 };
 
-/* ---------- 1b. BANDEIRAS ---------- */
+/* ---------- 1b. BANDEIRAS ----------
+   Emojis de bandeira não funcionam bem no Windows (mostra "PY", "CO",
+   etc. em vez da imagem) porque dependem da fonte do sistema. Por isso
+   usamos imagens reais de um CDN — funcionam iguais em qualquer SO. */
 
-const FLAGS = {
-  "Alemanha": "🇩🇪", "Paraguai": "🇵🇾", "França": "🇫🇷", "Suécia": "🇸🇪",
-  "África do Sul": "🇿🇦", "Canadá": "🇨🇦", "Holanda": "🇳🇱", "Marrocos": "🇲🇦",
-  "Brasil": "🇧🇷", "Japão": "🇯🇵", "Costa do Marfim": "🇨🇮", "Noruega": "🇳🇴",
-  "México": "🇲🇽", "Equador": "🇪🇨", "Inglaterra": "🏴", "RD Congo": "🇨🇩",
-  "Portugal": "🇵🇹", "Croácia": "🇭🇷", "Espanha": "🇪🇸", "Áustria": "🇦🇹",
-  "Estados Unidos": "🇺🇸", "Bósnia-Herzegovina": "🇧🇦", "Bélgica": "🇧🇪", "Senegal": "🇸🇳",
-  "Argentina": "🇦🇷", "Cabo Verde": "🇨🇻", "Austrália": "🇦🇺", "Egito": "🇪🇬",
-  "Suíça": "🇨🇭", "Argélia": "🇩🇿", "Colômbia": "🇨🇴", "Gana": "🇬🇭",
+const FLAG_CODES = {
+  "Alemanha": "de", "Paraguai": "py", "França": "fr", "Suécia": "se",
+  "África do Sul": "za", "Canadá": "ca", "Holanda": "nl", "Marrocos": "ma",
+  "Brasil": "br", "Japão": "jp", "Costa do Marfim": "ci", "Noruega": "no",
+  "México": "mx", "Equador": "ec", "Inglaterra": "gb-eng", "RD Congo": "cd",
+  "Portugal": "pt", "Croácia": "hr", "Espanha": "es", "Áustria": "at",
+  "Estados Unidos": "us", "Bósnia-Herzegovina": "ba", "Bélgica": "be", "Senegal": "sn",
+  "Argentina": "ar", "Cabo Verde": "cv", "Austrália": "au", "Egito": "eg",
+  "Suíça": "ch", "Argélia": "dz", "Colômbia": "co", "Gana": "gh",
 };
 
+// Versão em TEXTO simples (sem imagem) — usar só dentro de strings/
+// templates onde não dá para meter um elemento de imagem (ex: toast).
 function teamLabel(name) {
-  if (!name) return "";
-  const flag = FLAGS[name];
-  return flag ? `${flag} ${name}` : name;
+  return name || "";
+}
+
+// Versão visual — devolve um <span> com a bandeira (imagem) + o nome.
+// Usar como filho de el(...) em vez de dentro de uma string.
+function teamLabelNode(name) {
+  const wrap = el("span", { style: "display:inline-flex;align-items:center;gap:6px;justify-content:center;vertical-align:middle" });
+  const code = FLAG_CODES[name];
+  if (code) {
+    const img = el("img", {
+      src: `https://flagcdn.com/24x18/${code}.png`,
+      alt: "",
+      style: "width:20px;height:auto;border-radius:2px;flex-shrink:0;display:inline-block",
+      onerror: function () { this.remove(); },
+    });
+    wrap.appendChild(img);
+  }
+  wrap.appendChild(document.createTextNode(name || ""));
+  return wrap;
 }
 
 /* ---------- 1c. TOAST (aviso rápido no canto do ecrã) ---------- */
@@ -187,6 +207,7 @@ function buildEmptyBracket() {
       result: null,
       kickoff: KICKOFFS[id] || null,
       lateExceptions: {},  // { [idDoJogador]: true } — autorizações do host para apostar depois da hora
+      scoreExcluded: false,  // true = jogo não conta para a classificação (ex: já tinha começado quando a sala foi criada)
     };
   });
 
@@ -205,6 +226,7 @@ function buildEmptyBracket() {
         result: null,
         kickoff: KICKOFFS[id] || null,
         lateExceptions: {},
+        scoreExcluded: false,
       };
     }
     return count;
@@ -228,8 +250,7 @@ function calcPoints(prediction, result) {
   if (prediction.winner !== result.winner) return 0;
 
   let pts = POINTS.advance;
-  if (result.mode === "et" && prediction.mode === "et") pts += POINTS.et;
-  if (result.mode === "pens" && prediction.mode === "pens") pts += POINTS.pens;
+  if (prediction.mode === result.mode) pts += POINTS.phase;
   if (
     Number(prediction.scoreA) === Number(result.scoreA) &&
     Number(prediction.scoreB) === Number(result.scoreB)
@@ -439,6 +460,16 @@ async function grantLateException(gameId, playerName) {
 async function revokeLateException(gameId, playerId) {
   const gamesCol = db.collection("rooms").doc(state.room).collection("games");
   await gamesCol.doc(gameId).update({ [`lateExceptions.${playerId}`]: firebase.firestore.FieldValue.delete() });
+}
+
+// Permite ao host excluir (ou voltar a incluir) um jogo do cálculo da
+// classificação — útil para jogos que já tinham começado/acabado antes
+// de a sala ter sido criada, onde ninguém teve oportunidade justa de
+// apostar antes da hora. O jogo continua a aparecer normalmente (com o
+// resultado real e o feedback de cada um), só deixa de contar pontos.
+async function toggleScoreExclusion(gameId, exclude) {
+  const gamesCol = db.collection("rooms").doc(state.room).collection("games");
+  await gamesCol.doc(gameId).update({ scoreExcluded: exclude });
 }
 
 /* ====================================================================
@@ -655,8 +686,8 @@ function renderGameCard(game) {
   const kickoffPassed = !locked && game.kickoff && new Date(game.kickoff).getTime() <= Date.now() && !hasLateException;
 
   const teamsRow = el("div", { class: "teams-row" });
-  const teamABtn = el("div", { class: pickClass("A") }, teamLabel(game.teamA));
-  const teamBBtn = el("div", { class: pickClass("B") }, teamLabel(game.teamB));
+  const teamABtn = el("div", { class: pickClass("A") }, teamLabelNode(game.teamA));
+  const teamBBtn = el("div", { class: pickClass("B") }, teamLabelNode(game.teamB));
 
   function pickClass(side) {
     let cls = "team-pick";
@@ -692,18 +723,21 @@ function renderGameCard(game) {
       const modeCorrect = myPick.mode === result.mode;
       const exactCorrect = Number(myPick.scoreA) === Number(result.scoreA) &&
                             Number(myPick.scoreB) === Number(result.scoreB);
-      const myWinnerName = teamLabel(myPick.winner === "A" ? game.teamA : game.teamB);
+      const myWinnerNode = teamLabelNode(myPick.winner === "A" ? game.teamA : game.teamB);
       const pts = calcPoints(myPick, result);
 
       const feedback = el("div", { class: "feedback-box" });
-      feedback.appendChild(feedbackRow("Quem ganha", myWinnerName, winnerCorrect));
+      feedback.appendChild(feedbackRow("Quem ganha", myWinnerNode, winnerCorrect));
       feedback.appendChild(feedbackRow("Fase (regular / prolong. / pénaltis)", modeLabel(myPick.mode), modeCorrect));
       feedback.appendChild(feedbackRow("Resultado exato", `${myPick.scoreA} - ${myPick.scoreB}`, exactCorrect));
       card.appendChild(feedback);
 
       card.appendChild(
         el("div", { style: "text-align:center" },
-          el("span", { class: "points-pill" }, `a tua aposta valeu ${pts} pontos`))
+          el("span", { class: "points-pill" + (game.scoreExcluded ? " excluded" : "") },
+            game.scoreExcluded
+              ? "este jogo não conta para a classificação"
+              : `a tua aposta valeu ${pts} pontos`))
       );
     } else {
       card.appendChild(el("p", { class: "pending-msg", style: "text-align:center" }, "não fizeste aposta a este jogo"));
@@ -796,7 +830,7 @@ function renderGameCard(game) {
       scoreB: Number(local.scoreB),
       mode: local.mode,
     });
-    showToast(`✅ aposta guardada: ${teamLabel(game.teamA)} ${local.scoreA} - ${local.scoreB} ${teamLabel(game.teamB)}`);
+    showToast(`✅ aposta guardada: ${game.teamA} ${local.scoreA} - ${local.scoreB} ${game.teamB}`);
   };
   card.appendChild(saveBtn);
 
@@ -806,7 +840,7 @@ function renderGameCard(game) {
 function feedbackRow(label, value, correct) {
   return el("div", { class: "feedback-row " + (correct ? "correct" : "wrong") }, [
     el("span", {}, label),
-    el("span", { class: "feedback-value" }, `${value} ${correct ? "✅" : "❌"}`),
+    el("span", { class: "feedback-value" }, [value, ` ${correct ? "✅" : "❌"}`]),
   ]);
 }
 
@@ -857,7 +891,7 @@ function renderLeaderboard() {
     let total = 0;
     Object.entries(data.picks || {}).forEach(([gameId, pick]) => {
       const game = state.games[gameId];
-      if (game && game.status === "locked" && game.result) {
+      if (game && game.status === "locked" && game.result && !game.scoreExcluded) {
         total += calcPoints(pick, game.result);
       }
     });
@@ -910,22 +944,72 @@ function renderPlayerPicksDetail(data) {
     return box;
   }
 
+  let currentRound = null;
+  let totalPts = 0;
+
   lockedGames.forEach((game) => {
-    const pick = picks[game.id];
-    const line = el("div", { class: "player-pick-line" });
-    if (!pick) {
-      line.appendChild(el("span", { class: "pending-msg" }, `${teamLabel(game.teamA)} vs ${teamLabel(game.teamB)}: sem aposta`));
-    } else {
-      const winnerName = teamLabel(pick.winner === "A" ? game.teamA : game.teamB);
-      const pts = calcPoints(pick, game.result);
-      line.appendChild(el("span", {},
-        `${teamLabel(game.teamA)} vs ${teamLabel(game.teamB)}: apostou em ${winnerName}, ${pick.scoreA}-${pick.scoreB} (${modeLabel(pick.mode)})`));
-      line.appendChild(el("span", { class: "points-pill" }, `${pts} pts`));
+    if (game.round !== currentRound) {
+      currentRound = game.round;
+      box.appendChild(el("div", { class: "ppd-round-header" }, ROUND_LABELS[currentRound]));
     }
-    box.appendChild(line);
+
+    const pick = picks[game.id];
+    const row = el("div", { class: "ppd-row" });
+
+    const teams = el("div", { class: "ppd-teams" }, [
+      teamLabelNode(game.teamA), el("span", { class: "vs-label" }, " vs "), teamLabelNode(game.teamB),
+    ]);
+    row.appendChild(teams);
+
+    if (!pick) {
+      row.appendChild(el("div", { class: "ppd-nobet" }, "sem aposta"));
+      box.appendChild(row);
+      return;
+    }
+
+    const result = game.result;
+    const winnerCorrect = pick.winner === result.winner;
+    const modeCorrect = pick.mode === result.mode;
+    const exactCorrect = Number(pick.scoreA) === Number(result.scoreA) &&
+                          Number(pick.scoreB) === Number(result.scoreB);
+    const pts = calcPoints(pick, result);
+    if (!game.scoreExcluded) totalPts += pts;
+
+    const compare = el("div", { class: "ppd-compare" }, [
+      el("div", { class: "ppd-compare-line" }, [
+        el("span", { class: "ppd-compare-label" }, "apostou"),
+        el("span", { class: "ppd-compare-score" }, `${pick.scoreA} - ${pick.scoreB}`),
+      ]),
+      el("div", { class: "ppd-compare-line" }, [
+        el("span", { class: "ppd-compare-label" }, "real"),
+        el("span", { class: "ppd-compare-score" }, `${result.scoreA} - ${result.scoreB}`),
+      ]),
+    ]);
+    row.appendChild(compare);
+
+    const badges = el("div", { class: "ppd-badges" }, [
+      ppdBadge("vencedor", winnerCorrect),
+      ppdBadge("fase", modeCorrect),
+      ppdBadge("exato", exactCorrect),
+    ]);
+    row.appendChild(badges);
+
+    if (game.scoreExcluded) {
+      row.appendChild(el("span", { class: "points-pill excluded" }, "não conta"));
+    } else {
+      row.appendChild(el("span", { class: "points-pill" }, `${pts} pts`));
+    }
+
+    box.appendChild(row);
   });
 
+  box.appendChild(el("div", { class: "ppd-total" }, `Total nesta sala: ${totalPts} pts`));
+
   return box;
+}
+
+function ppdBadge(label, correct) {
+  return el("span", { class: "ppd-badge " + (correct ? "correct" : "wrong") }, `${correct ? "✅" : "❌"} ${label}`);
 }
 
 /* --- 11.7 Painel de administração --- */
@@ -958,19 +1042,30 @@ function renderAdminGameRow(game) {
 
   if (game.status === "locked" && game.result) {
     const r = game.result;
-    const winnerName = teamLabel(r.winner === "A" ? game.teamA : game.teamB);
+    const winnerNode = teamLabelNode(r.winner === "A" ? game.teamA : game.teamB);
     row.appendChild(
-      el("span", {}, `${teamLabel(game.teamA)} ${r.scoreA} - ${r.scoreB} ${teamLabel(game.teamB)} · venceu ${winnerName} (${modeLabel(r.mode)})`)
+      el("span", {}, [
+        teamLabelNode(game.teamA), ` ${r.scoreA} - ${r.scoreB} `, teamLabelNode(game.teamB),
+        ` · venceu `, winnerNode, ` (${modeLabel(r.mode)})`,
+      ])
     );
+    if (game.scoreExcluded) {
+      row.appendChild(el("span", { class: "points-pill excluded" }, "não conta p/ classificação"));
+    }
     const unlockBtn = el("button", { class: "small danger" }, "🔓 Corrigir");
     unlockBtn.onclick = () => unlockResult(game.id);
     row.appendChild(unlockBtn);
+    const excludeBtn = el("button", { class: "small" }, game.scoreExcluded ? "↩️ voltar a contar" : "🚫 tirar pontos");
+    excludeBtn.onclick = () => toggleScoreExclusion(game.id, !game.scoreExcluded);
+    row.appendChild(excludeBtn);
     return row;
   }
 
   // jogo aberto — admin pode confirmar resultado real
   const form = el("div", { style: "display:flex;gap:6px;align-items:center;flex-wrap:wrap;width:100%" });
-  form.appendChild(el("span", { style: "min-width:160px" }, `${teamLabel(game.teamA)} vs ${teamLabel(game.teamB)}`));
+  form.appendChild(el("span", { style: "min-width:160px;display:inline-flex;align-items:center;gap:6px" }, [
+    teamLabelNode(game.teamA), " vs ", teamLabelNode(game.teamB),
+  ]));
 
   const winnerSelect = el("select", { style: "width:auto" }, [
     el("option", { value: "A" }, game.teamA),

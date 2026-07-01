@@ -209,6 +209,11 @@ p { line-height: 1.5; color: var(--text-dim); }
   color: var(--gold-light);
   margin-top: 6px;
 }
+.points-pill.excluded {
+  background: rgba(154,164,196,.12);
+  color: var(--text-dim);
+  font-style: italic;
+}
 
 /* Feedback verde/vermelho da aposta vs. resultado real */
 .feedback-box {
@@ -248,19 +253,95 @@ p { line-height: 1.5; color: var(--text-dim); }
 .player-picks-detail {
   background: var(--navy-900);
   border-radius: var(--radius);
-  padding: 10px 12px;
+  padding: 12px;
   margin: -2px 0 10px;
 }
-.player-pick-line {
-  display: flex;
-  justify-content: space-between;
+
+.ppd-round-header {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text-dim);
+  padding: 10px 0 4px;
+  border-bottom: 1px solid var(--navy-600);
+  margin-bottom: 6px;
+}
+.ppd-round-header:first-child { padding-top: 0; }
+
+.ppd-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
   align-items: center;
   gap: 10px;
+  padding: 8px 6px;
+  border-radius: 8px;
   font-size: 13px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--navy-600);
 }
-.player-pick-line:last-child { border-bottom: none; }
+.ppd-row:hover { background: rgba(212,175,55,.05); }
+
+.ppd-teams {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ppd-nobet {
+  grid-column: 2 / span 3;
+  color: var(--text-dim);
+  font-style: italic;
+  font-size: 12px;
+  text-align: right;
+}
+
+.ppd-compare {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  min-width: 78px;
+}
+.ppd-compare-line { display: flex; justify-content: space-between; gap: 8px; }
+.ppd-compare-label { color: var(--text-dim); }
+.ppd-compare-score { font-weight: 600; color: var(--text-main); }
+
+.ppd-badges {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ppd-badge {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+.ppd-badge.correct { color: var(--green); background: rgba(63,174,92,.12); }
+.ppd-badge.wrong { color: #f2a4a1; background: rgba(214,83,79,.1); }
+
+.ppd-total {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--navy-600);
+  text-align: right;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gold-light);
+}
+
+@media (max-width: 480px) {
+  .ppd-row {
+    grid-template-columns: 1fr;
+    row-gap: 6px;
+    padding: 10px 6px;
+    border-bottom: 1px solid var(--navy-600);
+  }
+  .ppd-row:last-child { border-bottom: none; }
+  .ppd-compare { flex-direction: row; gap: 12px; }
+  .ppd-badges { flex-direction: row; flex-wrap: wrap; }
+}
 
 /* Admin */
 .admin-game-row {
