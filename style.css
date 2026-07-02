@@ -397,4 +397,4 @@ p { line-height: 1.5; color: var(--text-dim); }
   padding-left: 8px;
   padding-right: 8px;
 }
-.leaderboard-row.own-row .pts { color: var(--gold-light); }
+.leaderboard-row.own-row .pts { color: var(--gold-light); } 
