@@ -505,6 +505,58 @@ async function toggleScoreExclusion(gameId, exclude) {
   await gamesCol.doc(gameId).update({ scoreExcluded: exclude });
 }
 
+// ---------------------------------------------------------------------
+// Atualiza uma sala JÁ CRIADA para receber as novidades de código mais
+// recentes (horários, ligação correta das meias-finais, etc.) SEM
+// apagar nem tocar em nada que já lá esteja: apostas, resultados
+// confirmados e equipas já avançadas ficam exatamente na mesma. Isto
+// existe porque os jogos de uma sala só são criados UMA VEZ, no
+// momento em que a sala nasce — atualizações posteriores ao código
+// (como acrescentar `kickoff`) nunca chegavam a uma sala já existente,
+// e a única forma de as aplicar era apagar a sala toda (perdendo os
+// dados). Este botão resolve isso em definitivo, jogo a jogo:
+//   - kickoff: sincronizado sempre com o calendário mais recente do
+//     código (é só informação de horário, não é escolha de ninguém).
+//   - sourceA / sourceB: sincronizados sempre com a estrutura mais
+//     recente do bracket (corrige, por ex., o bug em que as
+//     meias-finais ligavam aos quartos errados) — nunca mexe em
+//     teamA/teamB, que é o progresso real já feito.
+//   - lateExceptions / scoreExcluded: só é criado se AINDA NÃO
+//     existir nesse jogo — nunca apaga uma decisão que o host já
+//     tenha tomado manualmente.
+async function migrateRoomGames(roomCode) {
+  const gamesCol = db.collection("rooms").doc(roomCode).collection("games");
+  const snap = await gamesCol.get();
+  if (snap.empty) return { updated: 0, total: 0 };
+
+  const template = buildEmptyBracket();
+  const batch = db.batch();
+  let updated = 0;
+
+  snap.forEach((docSnap) => {
+    const id = docSnap.id;
+    const tpl = template[id];
+    if (!tpl) return; // jogo que já não existe na estrutura atual — não mexe
+
+    const data = docSnap.data();
+    const patch = {};
+
+    if (data.kickoff !== tpl.kickoff) patch.kickoff = tpl.kickoff || null;
+    if (data.sourceA !== tpl.sourceA) patch.sourceA = tpl.sourceA;
+    if (data.sourceB !== tpl.sourceB) patch.sourceB = tpl.sourceB;
+    if (data.lateExceptions === undefined) patch.lateExceptions = {};
+    if (data.scoreExcluded === undefined) patch.scoreExcluded = tpl.scoreExcluded;
+
+    if (Object.keys(patch).length > 0) {
+      batch.update(docSnap.ref, patch);
+      updated++;
+    }
+  });
+
+  if (updated > 0) await batch.commit();
+  return { updated, total: snap.size };
+}
+
 /* ====================================================================
    10. LISTENERS EM TEMPO REAL
    ==================================================================== */
@@ -1051,6 +1103,8 @@ function renderAdminPanel() {
   const wrap = el("div", { class: "card section-gap" });
   wrap.appendChild(el("h2", {}, "🔧 Área de administração"));
 
+  wrap.appendChild(renderRoomUpdateBox());
+
   ROUNDS.forEach((round) => {
     const gamesOfRound = Object.values(state.games)
       .filter((g) => g.round === round)
@@ -1063,6 +1117,30 @@ function renderAdminPanel() {
   });
 
   return wrap;
+}
+
+// Caixa para o host puxar as novidades de código (horários, correção
+// do bracket, etc.) para dentro desta sala já criada, sem apagar nada.
+function renderRoomUpdateBox() {
+  const box = el("div", { style: "border:1px solid var(--gold); border-radius:var(--radius); padding:12px; margin-bottom:18px" });
+  box.appendChild(el("p", { style: "margin:0 0 8px" },
+    "💡 Sempre que eu acrescentar novidades ao site (horários, correções ao bracket, etc.), clica aqui para as trazer para esta sala — não apaga nem altera nenhuma aposta, resultado confirmado ou equipa já avançada."));
+  const btn = el("button", { class: "primary" }, "🔄 Atualizar esta sala com as novidades mais recentes");
+  btn.onclick = async () => {
+    btn.disabled = true;
+    btn.textContent = "a atualizar...";
+    try {
+      const { updated, total } = await migrateRoomGames(state.room);
+      showToast(updated > 0 ? `✅ ${updated} de ${total} jogos atualizados` : "✅ já estava tudo atualizado");
+    } catch (e) {
+      showError(box, e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "🔄 Atualizar esta sala com as novidades mais recentes";
+    }
+  };
+  box.appendChild(btn);
+  return box;
 }
 
 function renderAdminGameRow(game) {
