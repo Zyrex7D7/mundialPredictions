@@ -830,8 +830,24 @@ function renderGameCard(game) {
     return card;
   }
 
-  /* ---- apostas fechadas porque o jogo já começou (e ainda sem resultado) ---- */
+  /* ---- apostas fechadas porque o jogo já começou (e ainda sem resultado) ----
+     A pessoa continua a ver sempre a SUA PRÓPRIA aposta (só não pode
+     mudá-la) — só não vê as apostas de outros, isso continua a
+     depender do jogo estar confirmado (ver renderPlayerPicksDetail). */
   if (kickoffPassed) {
+    if (myPick) {
+      const myWinnerNode = teamLabelNode(myPick.winner === "A" ? game.teamA : game.teamB);
+      card.appendChild(
+        el("div", { class: "my-locked-pick" }, [
+          el("p", { class: "pending-msg", style: "margin:0 0 6px" }, "🔒 a tua aposta (já não pode ser alterada):"),
+          el("div", { class: "ppd-compare-line", style: "justify-content:center;gap:16px;font-size:14px" }, [
+            myWinnerNode,
+            el("span", { class: "ppd-compare-score" }, `${myPick.scoreA} - ${myPick.scoreB}`),
+            el("span", { class: "pending-msg" }, `(${modeLabel(myPick.mode)})`),
+          ]),
+        ])
+      );
+    }
     card.appendChild(el("p", { class: "pending-msg", style: "text-align:center" },
       "⏱️ as apostas fecharam — o jogo já começou. assim que o resultado for confirmado vês aqui como te saíste."));
     return card;

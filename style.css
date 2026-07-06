@@ -200,6 +200,15 @@ p { line-height: 1.5; color: var(--text-dim); }
   padding: 10px 0;
 }
 
+.my-locked-pick {
+  background: var(--navy-900);
+  border: 1px solid var(--navy-600);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 4px;
+}
+.my-locked-pick .pending-msg { padding: 0; }
+
 .points-pill {
   display: inline-block;
   font-size: 12px;
@@ -397,4 +406,4 @@ p { line-height: 1.5; color: var(--text-dim); }
   padding-left: 8px;
   padding-right: 8px;
 }
-.leaderboard-row.own-row .pts { color: var(--gold-light); } 
+.leaderboard-row.own-row .pts { color: var(--gold-light); }
