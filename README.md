@@ -12,7 +12,7 @@ style.css            → visual (tema azul-noite / dourado)
 app.js               → toda a lógica (contas, salas, bracket, pontos, admin)
 firebase-config.js   → as TUAS chaves do Firebase (tens de preencher — ver passo 2)
 ```
-
+ 
 ---
 
 ## Como meter tudo a funcionar (±10 minutos)
