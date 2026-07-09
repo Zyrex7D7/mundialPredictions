@@ -407,3 +407,106 @@ p { line-height: 1.5; color: var(--text-dim); }
   padding-right: 8px;
 }
 .leaderboard-row.own-row .pts { color: var(--gold-light); }
+
+/* Separador do Resumo Final */
+.round-tabs button.summary-tab {
+  border-color: var(--gold);
+  color: var(--gold-light);
+  font-weight: 600;
+}
+.round-tabs button.summary-tab.active {
+  background: rgba(212,175,55,.18);
+}
+
+.import-box {
+  padding: 10px 16px;
+  margin-bottom: 16px;
+}
+.import-box > .link-btn { padding: 0; }
+
+/* Pódio */
+.podium {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 12px;
+  margin: 18px 0 28px;
+}
+.podium-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100px;
+}
+.podium-name {
+  font-weight: 600;
+  font-size: 13px;
+  text-align: center;
+  margin-bottom: 2px;
+  word-break: break-word;
+}
+.podium-pts {
+  font-size: 12px;
+  color: var(--gold-light);
+  margin-bottom: 8px;
+}
+.podium-bar {
+  width: 100%;
+  border-radius: 8px 8px 0 0;
+  background: linear-gradient(180deg, var(--navy-600), var(--navy-700));
+  border: 1px solid var(--gold);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 10px;
+  font-size: 28px;
+}
+
+/* Prémios por categoria */
+.awards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.award-card {
+  background: var(--navy-900);
+  border: 1px solid var(--navy-600);
+  border-radius: var(--radius);
+  padding: 14px;
+  text-align: center;
+}
+.award-icon { font-size: 22px; margin-bottom: 6px; }
+.award-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  margin-bottom: 6px;
+}
+.award-name { font-weight: 600; color: var(--gold-light); }
+.award-value { font-size: 20px; font-weight: 700; }
+
+/* Comentários picantes */
+.roasts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.roast-card {
+  background: var(--navy-700);
+  border: 1px solid var(--navy-600);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.roast-title {
+  font-weight: 700;
+  color: var(--gold-light);
+  margin-bottom: 6px;
+}
+.roast-text {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-main);
+  margin: 0;
+}

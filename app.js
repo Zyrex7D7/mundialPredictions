@@ -169,6 +169,7 @@ const state = {
   unsubPreds: null,
   adminOpen: false,
   expandedPlayer: null,  // id do jogador cujas apostas estão abertas na classificação
+  importBoxOpen: false,  // caixa de "importar apostas de outra sala" aberta/fechada
 };
 
 const ROUNDS = ["r32", "r16", "qf", "sf", "final"];
@@ -434,6 +435,35 @@ async function savePick(gameId, pick) {
     { displayName: state.account.name, picks: { [gameId]: pick } },
     { merge: true }
   );
+}
+
+// Deixa a pessoa trazer as SUAS PRÓPRIAS apostas (mesma conta) de uma
+// sala antiga para a sala em que está agora — útil quando alguém
+// apostou por engano na sala errada, ou quando um grupo se junta numa
+// sala nova depois de ter começado noutra. Nunca mexe nas apostas de
+// mais ninguém. Jogo a jogo: se a pessoa já tiver apostado no mesmo
+// jogo nesta sala, a versão importada substitui-a; jogos que só
+// existem numa das duas salas mantêm-se como estavam.
+async function importMyPredictionsFromRoom(fromRoomCode) {
+  const fromCode = normalizeCode(fromRoomCode);
+  if (!fromCode) throw new Error("Escreve o código da sala de onde queres importar.");
+  if (fromCode === state.room) throw new Error("Essa já é a sala em que estás.");
+
+  const myId = normalizeCode(state.account.name);
+  const sourceSnap = await db.collection("rooms").doc(fromCode)
+    .collection("predictions").doc(myId).get();
+
+  if (!sourceSnap.exists || !sourceSnap.data().picks) {
+    throw new Error(`Não encontrei apostas tuas na sala "${fromCode}".`);
+  }
+
+  const sourcePicks = sourceSnap.data().picks;
+  await predictionsDocRef(state.account.name).set(
+    { displayName: state.account.name, picks: sourcePicks },
+    { merge: true }
+  );
+
+  return Object.keys(sourcePicks).length;
 }
 
 /* ====================================================================
@@ -722,13 +752,28 @@ function renderRoomChoiceView() {
 /* --- 11.4 Vista principal (bracket + leaderboard) --- */
 
 function renderMainView() {
+  const finalLocked = state.games.final_1 && state.games.final_1.status === "locked";
+
   const tabs = el("div", { class: "round-tabs" });
   ROUNDS.forEach((r) => {
     const btn = el("button", { class: r === currentTab ? "active" : "" }, ROUND_LABELS[r]);
     btn.onclick = () => { currentTab = r; render(); };
     tabs.appendChild(btn);
   });
+  if (finalLocked) {
+    const summaryBtn = el("button", { class: "summary-tab" + (currentTab === "summary" ? " active" : "") }, "🏆 Resumo Final");
+    summaryBtn.onclick = () => { currentTab = "summary"; render(); };
+    tabs.appendChild(summaryBtn);
+  }
   appEl.appendChild(tabs);
+  appEl.appendChild(renderImportBox());
+
+  if (currentTab === "summary" && finalLocked) {
+    appEl.appendChild(renderFinalSummary());
+    appEl.appendChild(renderLeaderboard());
+    if (state.adminOpen && state.isHost) appEl.appendChild(renderAdminPanel());
+    return;
+  }
 
   const gamesOfRound = Object.values(state.games)
     .filter((g) => g.round === currentTab)
@@ -744,6 +789,39 @@ function renderMainView() {
 }
 
 /* --- 11.5 Cartão de um jogo --- */
+
+// Caixa colapsável para trazer as próprias apostas de uma sala antiga
+// (mesma conta) para a sala atual. Fica fechada por omissão para não
+// atrapalhar quem não precisa.
+function renderImportBox() {
+  const box = el("div", { class: "card import-box" });
+
+  const toggleBtn = el("button", { class: "link-btn" },
+    state.importBoxOpen ? "▲ importar apostas de outra sala" : "📥 já apostaste noutra sala? importa aqui");
+  toggleBtn.onclick = () => { state.importBoxOpen = !state.importBoxOpen; render(); };
+  box.appendChild(toggleBtn);
+
+  if (state.importBoxOpen) {
+    box.appendChild(el("p", { style: "margin:10px 0" },
+      "Traz as TUAS apostas de uma sala antiga (com esta mesma conta) para esta sala. Jogo a jogo: se já tiveres apostado no mesmo jogo aqui, a versão importada substitui-a; apostas de jogos que só existem numa das duas salas mantêm-se."));
+    const codeInput = el("input", { type: "text", placeholder: "código da sala antiga" });
+    box.appendChild(codeInput);
+    const importBtn = el("button", { class: "primary", style: "margin-top:10px" }, "Importar as minhas apostas");
+    importBtn.onclick = async () => {
+      try {
+        const count = await importMyPredictionsFromRoom(codeInput.value);
+        showToast(`✅ ${count} apostas importadas`);
+        state.importBoxOpen = false;
+        render();
+      } catch (e) {
+        showError(box, e.message);
+      }
+    };
+    box.appendChild(importBtn);
+  }
+
+  return box;
+}
 
 function renderGameCard(game) {
   const card = el("div", { class: "game-card" + (game.status === "locked" ? " locked" : "") });
@@ -1111,6 +1189,137 @@ function renderPlayerPicksDetail(data) {
 
 function ppdBadge(label, correct) {
   return el("span", { class: "ppd-badge " + (correct ? "correct" : "wrong") }, `${correct ? "✅" : "❌"} ${label}`);
+}
+
+/* --- 11.6b Resumo Final (pódio + estatísticas + comentários) ---
+   Só aparece quando a final está confirmada. Calcula, por jogador,
+   quantos vencedores/fases/resultados exatos acertou ao longo de toda
+   a competição (jogos excluídos da pontuação continuam a contar aqui
+   como "acerto", já que isto é estatística de conhecimento de
+   futebol, não a classificação oficial). */
+
+function computePlayerStats() {
+  const lockedGames = Object.values(state.games).filter((g) => g.status === "locked" && g.result);
+
+  return Object.entries(state.predictions).map(([playerId, data]) => {
+    const name = data.displayName || playerId;
+    const picks = data.picks || {};
+    let points = 0, correctWinners = 0, correctPhases = 0, correctExact = 0, totalBets = 0;
+
+    lockedGames.forEach((game) => {
+      const pick = picks[game.id];
+      if (!pick) return;
+      totalBets++;
+      const result = game.result;
+      const winnerOk = pick.winner === result.winner;
+      if (winnerOk) correctWinners++;
+      if (pick.mode === result.mode) correctPhases++;
+      if (Number(pick.scoreA) === Number(result.scoreA) && Number(pick.scoreB) === Number(result.scoreB)) correctExact++;
+      if (!game.scoreExcluded) points += calcPoints(pick, result);
+    });
+
+    return { playerId, name, points, correctWinners, correctPhases, correctExact, totalBets };
+  }).sort((a, b) => b.points - a.points);
+}
+
+function renderFinalSummary() {
+  const wrap = el("div", { class: "card section-gap" });
+  const stats = computePlayerStats();
+
+  wrap.appendChild(el("h2", {}, "🏆 Resumo do Mundial 26"));
+
+  if (stats.length === 0) {
+    wrap.appendChild(el("p", {}, "Ninguém fez previsões nesta sala."));
+    return wrap;
+  }
+
+  wrap.appendChild(renderPodium(stats));
+  wrap.appendChild(renderAwards(stats));
+  wrap.appendChild(renderRoasts(stats));
+
+  return wrap;
+}
+
+// Pódio visual com os 3 primeiros por pontos (2º-1º-3º, como um pódio a sério)
+function renderPodium(stats) {
+  const box = el("div", { class: "podium" });
+  const order = [stats[1], stats[0], stats[2]]; // 2º, 1º, 3º
+  const heights = [110, 150, 85];
+  const medals = ["🥈", "🥇", "🥉"];
+
+  order.forEach((p, i) => {
+    const col = el("div", { class: "podium-col" });
+    col.appendChild(el("div", { class: "podium-name" }, p ? p.name : "—"));
+    col.appendChild(el("div", { class: "podium-pts" }, p ? `${p.points} pts` : ""));
+    col.appendChild(el("div", { class: "podium-bar", style: `height:${heights[i]}px` }, medals[i]));
+    box.appendChild(col);
+  });
+
+  return box;
+}
+
+// Pequenos "prémios" por categoria — quem mais acertou em cada coisa
+function renderAwards(stats) {
+  const box = el("div", { class: "awards-grid" });
+
+  const topBy = (key, label, icon) => {
+    const best = [...stats].sort((a, b) => b[key] - a[key])[0];
+    if (!best || best[key] === 0) return null;
+    return el("div", { class: "award-card" }, [
+      el("div", { class: "award-icon" }, icon),
+      el("div", { class: "award-label" }, label),
+      el("div", { class: "award-name" }, best.name),
+      el("div", { class: "award-value" }, `${best[key]}`),
+    ]);
+  };
+
+  [
+    topBy("correctWinners", "Mais vencedores certos", "🎯"),
+    topBy("correctExact", "Mais resultados exatos", "🔮"),
+    topBy("correctPhases", "Mais fases certas (regular/prolong./pénaltis)", "⏱️"),
+  ].forEach((card) => { if (card) box.appendChild(card); });
+
+  return box;
+}
+
+// Comentários "picantes" com humor sobre cada lugar do pódio + lanterna vermelha
+function renderRoasts(stats) {
+  const box = el("div", { class: "roasts" });
+
+  const first = stats[0];
+  const second = stats[1];
+  const third = stats[2];
+  const last = stats[stats.length - 1];
+
+  if (first) {
+    box.appendChild(roastCard("🥇", `${first.name} — o topo`,
+      `${first.points} pontos e uma atitude completamente insuportável a partir de agora, garantido. ` +
+      `Acertaste ${first.correctWinners} vencedores e ${first.correctExact} resultados exatos — ou percebes mesmo de futebol, ou tens um acordo secreto com a bola. De qualquer forma, aproveita o troféu imaginário, porque para o ano começas do zero como toda a gente.`));
+  }
+
+  if (second) {
+    box.appendChild(roastCard("🥈", `${second.name} — tão perto, tão longe`,
+      `${second.points} pontos, a uma unha de distância da glória. É o pódio mais frustrante que existe: alto o suficiente para cheirar o ouro, baixo o suficiente para nunca lhe tocar. Vais dormir bem esta noite? Boa pergunta.`));
+  }
+
+  if (third) {
+    box.appendChild(roastCard("🥉", `${third.name} — entrou pela porta do cão`,
+      `${third.points} pontos e um lugar no pódio que, sejamos honestos, ninguém vai lembrar daqui a um ano. Mas contam-se é os presentes, e tu estiveste presente. Parabéns pelo bronze de participação.`));
+  }
+
+  if (last && stats.length > 3) {
+    box.appendChild(roastCard("🚨", `${last.name} — a lanterna vermelha`,
+      `${last.points} pontos. Impressionante, no mau sentido — dava para apostar de olhos fechados e sair-se melhor. Já pensaste em apostar contra as tuas próprias escolhas para o ano? Estatisticamente parece ser a jogada certa.`));
+  }
+
+  return box;
+}
+
+function roastCard(icon, title, text) {
+  return el("div", { class: "roast-card" }, [
+    el("div", { class: "roast-title" }, `${icon} ${title}`),
+    el("p", { class: "roast-text" }, text),
+  ]);
 }
 
 /* --- 11.7 Painel de administração --- */
