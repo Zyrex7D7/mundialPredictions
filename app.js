@@ -766,11 +766,17 @@ function renderMainView() {
     tabs.appendChild(summaryBtn);
   }
   appEl.appendChild(tabs);
-  appEl.appendChild(renderImportBox());
+  
+  // REMOVE ESTA LINHA DAQUI:
+  // appEl.appendChild(renderImportBox()); 
 
   if (currentTab === "summary" && finalLocked) {
     appEl.appendChild(renderFinalSummary());
     appEl.appendChild(renderLeaderboard());
+    
+    // ADICIONA AQUI (para aparecer no resumo):
+    appEl.appendChild(renderImportBox()); 
+    
     if (state.adminOpen && state.isHost) appEl.appendChild(renderAdminPanel());
     return;
   }
@@ -781,7 +787,9 @@ function renderMainView() {
 
   gamesOfRound.forEach((g) => appEl.appendChild(renderGameCard(g)));
 
+  // ADICIONA AQUI (logo a seguir à leaderboard):
   appEl.appendChild(renderLeaderboard());
+  appEl.appendChild(renderImportBox()); 
 
   if (state.adminOpen && state.isHost) {
     appEl.appendChild(renderAdminPanel());
