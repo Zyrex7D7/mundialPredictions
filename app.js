@@ -148,7 +148,125 @@ function teamLabelNode(name) {
   return wrap;
 }
 
-/* ---------- 1c. TOAST (aviso rápido no canto do ecrã) ---------- */
+/* ---------- 1b-bis. RESULTADOS AUTOMÁTICOS (fonte gratuita, sem chave) ----------
+   Fonte: openfootball/worldcup.json — dados abertos e gratuitos do
+   Mundial 26, sem necessidade de chave de API. Ficheiro estático no
+   GitHub, atualizado pela comunidade depois de cada jogo terminar
+   (não é "ao segundo", mas é rápido o suficiente para o nosso caso).
+   https://github.com/openfootball/worldcup.json */
+const RESULTS_FEED_URL = "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json";
+
+// Nomes em inglês (como vêm na fonte) → nomes em português (como usamos
+// no site). Normalizado (sem acentos, minúsculas) para aceitar pequenas
+// variações de grafia sem falhar o emparelhamento.
+const TEAM_NAME_EN_TO_PT = {
+  "germany": "Alemanha", "paraguay": "Paraguai", "france": "França", "sweden": "Suécia",
+  "south africa": "África do Sul", "canada": "Canadá",
+  "netherlands": "Holanda", "morocco": "Marrocos",
+  "brazil": "Brasil", "japan": "Japão",
+  "ivory coast": "Costa do Marfim", "cote d'ivoire": "Costa do Marfim",
+  "norway": "Noruega", "mexico": "México", "ecuador": "Equador",
+  "england": "Inglaterra",
+  "dr congo": "RD Congo", "congo dr": "RD Congo", "democratic republic of the congo": "RD Congo",
+  "portugal": "Portugal", "croatia": "Croácia",
+  "spain": "Espanha", "austria": "Áustria",
+  "usa": "Estados Unidos", "united states": "Estados Unidos",
+  "bosnia & herzegovina": "Bósnia-Herzegovina", "bosnia and herzegovina": "Bósnia-Herzegovina", "bosnia-herzegovina": "Bósnia-Herzegovina",
+  "belgium": "Bélgica", "senegal": "Senegal",
+  "argentina": "Argentina", "cape verde": "Cabo Verde",
+  "australia": "Austrália", "egypt": "Egito",
+  "switzerland": "Suíça", "algeria": "Argélia",
+  "colombia": "Colômbia", "ghana": "Gana",
+};
+
+function normalizeTeamKey(name) {
+  return (name || "").toString().trim().toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[’‘]/g, "'");
+}
+
+function translateTeamName(enName) {
+  return TEAM_NAME_EN_TO_PT[normalizeTeamKey(enName)] || null;
+}
+
+async function fetchWorldCupResultsFeed() {
+  const res = await fetch(RESULTS_FEED_URL, { cache: "no-store" });
+  if (!res.ok) throw new Error("Não consegui contactar a fonte de resultados.");
+  const data = await res.json();
+  return data.matches || [];
+}
+
+// Lê o resultado de uma entrada da fonte e devolve { winner, scoreA,
+// scoreB, mode } na orientação A/B do nosso jogo, ou null se ainda não
+// houver resultado utilizável (jogo por realizar, ou dados incompletos).
+// A fonte usa: ft = resultado normal, et = depois de prolongamento
+// (só existe se tiver havido prolongamento), p = pénaltis (só existe
+// se tiver ido a pénaltis) — confirmado com um caso real (Alemanha
+// 1-1 Paraguai, 3-4 pénaltis).
+function extractResultFromFeedMatch(match, teamAIsTeam1) {
+  const score = match.score || {};
+  const pick = (pair) => teamAIsTeam1 ? [pair[0], pair[1]] : [pair[1], pair[0]];
+
+  if (score.p) {
+    const base = score.et || score.ft;
+    if (!base) return null;
+    const [scoreA, scoreB] = pick(base);
+    const [pA, pB] = pick(score.p);
+    if (pA === pB) return null; // pénaltis sem desempate = dados incompletos
+    return { winner: pA > pB ? "A" : "B", scoreA, scoreB, mode: "pens" };
+  }
+  if (score.et) {
+    const [scoreA, scoreB] = pick(score.et);
+    if (scoreA === scoreB) return null; // eliminatória empatada sem pénaltis = dados incompletos
+    return { winner: scoreA > scoreB ? "A" : "B", scoreA, scoreB, mode: "et" };
+  }
+  if (score.ft) {
+    const [scoreA, scoreB] = pick(score.ft);
+    if (scoreA === scoreB) return null; // eliminatória empatada sem indicação de prolongamento/pénaltis
+    return { winner: scoreA > scoreB ? "A" : "B", scoreA, scoreB, mode: "regular" };
+  }
+  return null;
+}
+
+// Percorre os jogos ABERTOS desta sala e confirma automaticamente os
+// que já têm resultado disponível na fonte. Só corre para o host —
+// é o browser dele que faz a verificação, por isso só funciona
+// enquanto ele tiver o site aberto (não há servidor próprio neste
+// site, é só ficheiros estáticos + Firebase).
+async function autoSyncResultsFromFeed() {
+  if (!state.isHost || !state.room) return;
+
+  let matches;
+  try {
+    matches = await fetchWorldCupResultsFeed();
+  } catch (e) {
+    console.warn("Falha ao buscar resultados automáticos:", e.message);
+    return;
+  }
+
+  const openGames = Object.values(state.games).filter((g) => g.status === "open" && g.teamA && g.teamB);
+
+  for (const game of openGames) {
+    const feedMatch = matches.find((m) => {
+      const t1 = translateTeamName(m.team1);
+      const t2 = translateTeamName(m.team2);
+      if (!t1 || !t2) return false;
+      return (t1 === game.teamA && t2 === game.teamB) || (t1 === game.teamB && t2 === game.teamA);
+    });
+    if (!feedMatch) continue;
+
+    const teamAIsTeam1 = translateTeamName(feedMatch.team1) === game.teamA;
+    const result = extractResultFromFeedMatch(feedMatch, teamAIsTeam1);
+    if (!result) continue;
+
+    try {
+      await confirmResult(game.id, result.winner, result.scoreA, result.scoreB, result.mode);
+      showToast(`🤖 resultado confirmado automaticamente: ${game.teamA} ${result.scoreA}-${result.scoreB} ${game.teamB}`);
+    } catch (e) {
+      console.warn(`Falha ao confirmar automaticamente ${game.id}:`, e.message);
+    }
+  }
+}
 
 function showToast(msg) {
   const toast = el("div", { class: "toast" }, msg);
@@ -173,6 +291,7 @@ const state = {
   adminOpen: false,
   expandedPlayer: null,  // id do jogador cujas apostas estão abertas na classificação
   importBoxOpen: false,  // caixa de "importar apostas de outra sala" aberta/fechada
+  autoSyncTimer: null,   // id do setInterval que verifica resultados automaticamente (só host)
 };
 
 const ROUNDS = ["r32", "r16", "qf", "sf", "third_place", "final"];
@@ -1369,6 +1488,7 @@ function renderAdminPanel() {
   const wrap = el("div", { class: "card section-gap" });
   wrap.appendChild(el("h2", {}, "🔧 Área de administração"));
 
+  wrap.appendChild(renderAutoResultsBox());
   wrap.appendChild(renderRoomUpdateBox());
 
   ROUNDS.forEach((round) => {
@@ -1383,6 +1503,24 @@ function renderAdminPanel() {
   });
 
   return wrap;
+}
+
+// Caixa que explica e permite forçar já uma verificação de resultados
+// automáticos (fonte: openfootball/worldcup.json, gratuita, sem chave).
+function renderAutoResultsBox() {
+  const box = el("div", { style: "border:1px solid var(--navy-600); border-radius:var(--radius); padding:12px; margin-bottom:14px" });
+  box.appendChild(el("p", { style: "margin:0 0 8px" },
+    "🤖 Os resultados são confirmados automaticamente a partir de uma fonte gratuita (openfootball/worldcup.json), a cada 5 minutos, enquanto tiveres o site aberto nesta conta de host. Não é instantâneo — depende de a fonte já ter o resultado — mas não precisas de meter nada à mão a não ser que queiras corrigir algo."));
+  const btn = el("button", { class: "small" }, "🔄 verificar resultados agora");
+  btn.onclick = async () => {
+    btn.disabled = true;
+    btn.textContent = "a verificar...";
+    await autoSyncResultsFromFeed();
+    btn.disabled = false;
+    btn.textContent = "🔄 verificar resultados agora";
+  };
+  box.appendChild(btn);
+  return box;
 }
 
 // Caixa para o host puxar as novidades de código (horários, correção
@@ -1530,11 +1668,18 @@ async function enterRoom(code) {
   state.isHost = host === state.account.name;
   attachRoomListeners();
   render();
+
+  if (state.isHost) {
+    autoSyncResultsFromFeed(); // primeira verificação já ao entrar
+    if (state.autoSyncTimer) clearInterval(state.autoSyncTimer);
+    state.autoSyncTimer = setInterval(autoSyncResultsFromFeed, 5 * 60 * 1000); // depois, a cada 5 min
+  }
 }
 
 function leaveRoom() {
   if (state.unsubGames) state.unsubGames();
   if (state.unsubPreds) state.unsubPreds();
+  if (state.autoSyncTimer) { clearInterval(state.autoSyncTimer); state.autoSyncTimer = null; }
   state.room = null;
   state.games = {};
   state.predictions = {};
