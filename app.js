@@ -80,6 +80,9 @@ const KICKOFFS = {
   sf_1: "2026-07-14T20:00:00+01:00", // Jogo 101 - Vencedor jogo 97 x Vencedor jogo 98
   sf_2: "2026-07-15T20:00:00+01:00", // Jogo 102 - Vencedor jogo 99 x Vencedor jogo 100
 
+  // --- Jogo do 3.º lugar ---
+  third_place_1: "2026-07-18T22:00:00+01:00", // Jogo 103 - Derrotado jogo 101 x Derrotado jogo 102
+
   // --- Final ---
   final_1: "2026-07-19T20:00:00+01:00", // Jogo 104 - Vencedor jogo 101 x Vencedor jogo 102
 };
@@ -172,12 +175,13 @@ const state = {
   importBoxOpen: false,  // caixa de "importar apostas de outra sala" aberta/fechada
 };
 
-const ROUNDS = ["r32", "r16", "qf", "sf", "final"];
+const ROUNDS = ["r32", "r16", "qf", "sf", "third_place", "final"];
 const ROUND_LABELS = {
   r32: "Fase de 32",
   r16: "Oitavos",
   qf: "Quartos",
   sf: "Meias",
+  third_place: "3.º Lugar",
   final: "Final",
 };
 let currentTab = "r32";
@@ -271,6 +275,23 @@ function buildEmptyBracket() {
   // Jogo102 = venc.99 x venc.100 = qf_2 x qf_4), não o padrão genérico 1+2 / 3+4.
   prevCount = buildRound("sf", "qf", prevCount, [[1, 3], [2, 4]]);
   buildRound("final", "sf", prevCount);
+
+  // Jogo do 3.º lugar (Jogo 103) — o único jogo do bracket que é
+  // alimentado pelos PERDEDORES das meias-finais, não pelos vencedores.
+  // Por isso usa loserSourceA/loserSourceB em vez de sourceA/sourceB
+  // (ver confirmResult, que avança perdedor OU vencedor conforme o
+  // tipo de ligação de cada jogo seguinte).
+  games["third_place_1"] = {
+    id: "third_place_1", round: "third_place", order: 1,
+    teamA: null, teamB: null,
+    sourceA: null, sourceB: null,
+    loserSourceA: "sf_1", loserSourceB: "sf_2",
+    status: "pending",
+    result: null,
+    kickoff: KICKOFFS.third_place_1 || null,
+    lateExceptions: {},
+    scoreExcluded: false,
+  };
 
   return games;
 }
@@ -485,16 +506,21 @@ async function confirmResult(gameId, winnerSide, scoreA, scoreB, mode) {
   await gamesCol.doc(gameId).update({ status: "locked", result });
 
   const winningTeam = winnerSide === "A" ? game.teamA : game.teamB;
+  const losingTeam = winnerSide === "A" ? game.teamB : game.teamA;
 
-  // avança a equipa vencedora para o jogo seguinte (se houver)
+  // avança a equipa vencedora (ou, no caso do jogo do 3.º lugar, a
+  // perdedora) para o jogo seguinte, se houver
   const nextGames = Object.values(state.games).filter(
-    (g) => g.sourceA === gameId || g.sourceB === gameId
+    (g) => g.sourceA === gameId || g.sourceB === gameId ||
+           g.loserSourceA === gameId || g.loserSourceB === gameId
   );
 
   for (const ng of nextGames) {
     const update = {};
     if (ng.sourceA === gameId) update.teamA = winningTeam;
     if (ng.sourceB === gameId) update.teamB = winningTeam;
+    if (ng.loserSourceA === gameId) update.teamA = losingTeam;
+    if (ng.loserSourceB === gameId) update.teamB = losingTeam;
 
     const futureTeamA = update.teamA ?? ng.teamA;
     const futureTeamB = update.teamB ?? ng.teamB;
@@ -557,13 +583,16 @@ async function toggleScoreExclusion(gameId, exclude) {
 async function migrateRoomGames(roomCode) {
   const gamesCol = db.collection("rooms").doc(roomCode).collection("games");
   const snap = await gamesCol.get();
-  if (snap.empty) return { updated: 0, total: 0 };
+  if (snap.empty) return { updated: 0, created: 0, total: 0 };
 
   const template = buildEmptyBracket();
   const batch = db.batch();
   let updated = 0;
+  let created = 0;
 
+  const existingIds = new Set();
   snap.forEach((docSnap) => {
+    existingIds.add(docSnap.id);
     const id = docSnap.id;
     const tpl = template[id];
     if (!tpl) return; // jogo que já não existe na estrutura atual — não mexe
@@ -574,6 +603,8 @@ async function migrateRoomGames(roomCode) {
     if (data.kickoff !== tpl.kickoff) patch.kickoff = tpl.kickoff || null;
     if (data.sourceA !== tpl.sourceA) patch.sourceA = tpl.sourceA;
     if (data.sourceB !== tpl.sourceB) patch.sourceB = tpl.sourceB;
+    if ((data.loserSourceA || null) !== (tpl.loserSourceA || null)) patch.loserSourceA = tpl.loserSourceA || null;
+    if ((data.loserSourceB || null) !== (tpl.loserSourceB || null)) patch.loserSourceB = tpl.loserSourceB || null;
     if (data.lateExceptions === undefined) patch.lateExceptions = {};
     if (data.scoreExcluded === undefined) patch.scoreExcluded = tpl.scoreExcluded;
 
@@ -583,8 +614,18 @@ async function migrateRoomGames(roomCode) {
     }
   });
 
-  if (updated > 0) await batch.commit();
-  return { updated, total: snap.size };
+  // Jogos que existem na estrutura mais recente mas ainda não existem
+  // nesta sala (ex: o jogo do 3.º lugar, acrescentado mais tarde) —
+  // são criados de raiz, sem afetar nenhum dos jogos já existentes.
+  Object.values(template).forEach((tpl) => {
+    if (!existingIds.has(tpl.id)) {
+      batch.set(gamesCol.doc(tpl.id), tpl);
+      created++;
+    }
+  });
+
+  if (updated > 0 || created > 0) await batch.commit();
+  return { updated, created, total: snap.size + created };
 }
 
 /* ====================================================================
@@ -766,17 +807,11 @@ function renderMainView() {
     tabs.appendChild(summaryBtn);
   }
   appEl.appendChild(tabs);
-  
-  // REMOVE ESTA LINHA DAQUI:
-  // appEl.appendChild(renderImportBox()); 
+  appEl.appendChild(renderImportBox());
 
   if (currentTab === "summary" && finalLocked) {
     appEl.appendChild(renderFinalSummary());
     appEl.appendChild(renderLeaderboard());
-    
-    // ADICIONA AQUI (para aparecer no resumo):
-    appEl.appendChild(renderImportBox()); 
-    
     if (state.adminOpen && state.isHost) appEl.appendChild(renderAdminPanel());
     return;
   }
@@ -787,9 +822,7 @@ function renderMainView() {
 
   gamesOfRound.forEach((g) => appEl.appendChild(renderGameCard(g)));
 
-  // ADICIONA AQUI (logo a seguir à leaderboard):
   appEl.appendChild(renderLeaderboard());
-  appEl.appendChild(renderImportBox()); 
 
   if (state.adminOpen && state.isHost) {
     appEl.appendChild(renderAdminPanel());
@@ -1363,8 +1396,15 @@ function renderRoomUpdateBox() {
     btn.disabled = true;
     btn.textContent = "a atualizar...";
     try {
-      const { updated, total } = await migrateRoomGames(state.room);
-      showToast(updated > 0 ? `✅ ${updated} de ${total} jogos atualizados` : "✅ já estava tudo atualizado");
+      const { updated, created, total } = await migrateRoomGames(state.room);
+      if (updated === 0 && created === 0) {
+        showToast("✅ já estava tudo atualizado");
+      } else {
+        const parts = [];
+        if (created > 0) parts.push(`${created} jogo(s) novo(s) criado(s)`);
+        if (updated > 0) parts.push(`${updated} de ${total} jogos atualizados`);
+        showToast(`✅ ${parts.join(", ")}`);
+      }
     } catch (e) {
       showError(box, e.message);
     } finally {
