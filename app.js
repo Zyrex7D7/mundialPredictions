@@ -149,12 +149,17 @@ function teamLabelNode(name) {
 }
 
 /* ---------- 1b-bis. RESULTADOS AUTOMÁTICOS (fonte gratuita, sem chave) ----------
-   Fonte: openfootball/worldcup.json — dados abertos e gratuitos do
-   Mundial 26, sem necessidade de chave de API. Ficheiro estático no
-   GitHub, atualizado pela comunidade depois de cada jogo terminar
-   (não é "ao segundo", mas é rápido o suficiente para o nosso caso).
-   https://github.com/openfootball/worldcup.json */
-const RESULTS_FEED_URL = "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json";
+   Fonte: worldcup26.ir (projeto comunitário, gratuito, sem chave),
+   confirmada com dados reais que já batem certo com tudo o que já
+   tínhamos (incluindo os pénaltis Alemanha 1-1 (3-4) Paraguai).
+   Limitação conhecida: esta fonte não distingue explicitamente
+   "prolongamento" de "tempo regular" quando o jogo NÃO vai a
+   pénaltis — só sinaliza pénaltis quando existem. Por isso, um jogo
+   decidido em prolongamento sem pénaltis fica marcado como "tempo
+   regular" (fase incorreta, mas vencedor e resultado exato corretos).
+   Se souberes que um jogo específico foi a prolongamento sem
+   pénaltis, corrige a fase à mão no admin ("🔓 Corrigir"). */
+const RESULTS_FEED_URL = "https://worldcup26.ir/get/games";
 
 // Nomes em inglês (como vêm na fonte) → nomes em português (como usamos
 // no site). Normalizado (sem acentos, minúsculas) para aceitar pequenas
@@ -193,39 +198,45 @@ async function fetchWorldCupResultsFeed() {
   const res = await fetch(RESULTS_FEED_URL, { cache: "no-store" });
   if (!res.ok) throw new Error("Não consegui contactar a fonte de resultados.");
   const data = await res.json();
-  return data.matches || [];
+  return data.games || [];
+}
+
+// A fonte representa "sem pénaltis" tanto por a chave nem existir como
+// por existir com o valor (em string) "null" — este auxiliar trata os
+// dois casos como "não há pénaltis aqui".
+function feedPenaltyValue(raw) {
+  if (raw === undefined || raw === null || raw === "null") return null;
+  const n = Number(raw);
+  return Number.isNaN(n) ? null : n;
 }
 
 // Lê o resultado de uma entrada da fonte e devolve { winner, scoreA,
 // scoreB, mode } na orientação A/B do nosso jogo, ou null se ainda não
-// houver resultado utilizável (jogo por realizar, ou dados incompletos).
-// A fonte usa: ft = resultado normal, et = depois de prolongamento
-// (só existe se tiver havido prolongamento), p = pénaltis (só existe
-// se tiver ido a pénaltis) — confirmado com um caso real (Alemanha
-// 1-1 Paraguai, 3-4 pénaltis).
-function extractResultFromFeedMatch(match, teamAIsTeam1) {
-  const score = match.score || {};
-  const pick = (pair) => teamAIsTeam1 ? [pair[0], pair[1]] : [pair[1], pair[0]];
+// houver resultado utilizável.
+function extractResultFromFeedMatch(match, teamAIsHome) {
+  if (match.finished !== "TRUE") return null;
 
-  if (score.p) {
-    const base = score.et || score.ft;
-    if (!base) return null;
-    const [scoreA, scoreB] = pick(base);
-    const [pA, pB] = pick(score.p);
+  const homeScore = Number(match.home_score);
+  const awayScore = Number(match.away_score);
+  if (Number.isNaN(homeScore) || Number.isNaN(awayScore)) return null;
+
+  const scoreA = teamAIsHome ? homeScore : awayScore;
+  const scoreB = teamAIsHome ? awayScore : homeScore;
+
+  const homePens = feedPenaltyValue(match.home_penalty_score);
+  const awayPens = feedPenaltyValue(match.away_penalty_score);
+
+  if (homePens !== null && awayPens !== null) {
+    const pA = teamAIsHome ? homePens : awayPens;
+    const pB = teamAIsHome ? awayPens : homePens;
     if (pA === pB) return null; // pénaltis sem desempate = dados incompletos
     return { winner: pA > pB ? "A" : "B", scoreA, scoreB, mode: "pens" };
   }
-  if (score.et) {
-    const [scoreA, scoreB] = pick(score.et);
-    if (scoreA === scoreB) return null; // eliminatória empatada sem pénaltis = dados incompletos
-    return { winner: scoreA > scoreB ? "A" : "B", scoreA, scoreB, mode: "et" };
-  }
-  if (score.ft) {
-    const [scoreA, scoreB] = pick(score.ft);
-    if (scoreA === scoreB) return null; // eliminatória empatada sem indicação de prolongamento/pénaltis
-    return { winner: scoreA > scoreB ? "A" : "B", scoreA, scoreB, mode: "regular" };
-  }
-  return null;
+
+  if (scoreA === scoreB) return null; // eliminatória empatada sem pénaltis = dados incompletos
+  // Não há forma de distinguir "prolongamento" de "tempo regular" nesta
+  // fonte quando não há pénaltis — ver nota no topo do ficheiro.
+  return { winner: scoreA > scoreB ? "A" : "B", scoreA, scoreB, mode: "regular" };
 }
 
 // Percorre os jogos ABERTOS desta sala e confirma automaticamente os
@@ -236,9 +247,9 @@ function extractResultFromFeedMatch(match, teamAIsTeam1) {
 async function autoSyncResultsFromFeed() {
   if (!state.isHost || !state.room) return;
 
-  let matches;
+  let feedGames;
   try {
-    matches = await fetchWorldCupResultsFeed();
+    feedGames = await fetchWorldCupResultsFeed();
   } catch (e) {
     console.warn("Falha ao buscar resultados automáticos:", e.message);
     return;
@@ -247,16 +258,16 @@ async function autoSyncResultsFromFeed() {
   const openGames = Object.values(state.games).filter((g) => g.status === "open" && g.teamA && g.teamB);
 
   for (const game of openGames) {
-    const feedMatch = matches.find((m) => {
-      const t1 = translateTeamName(m.team1);
-      const t2 = translateTeamName(m.team2);
-      if (!t1 || !t2) return false;
-      return (t1 === game.teamA && t2 === game.teamB) || (t1 === game.teamB && t2 === game.teamA);
+    const feedMatch = feedGames.find((m) => {
+      const home = translateTeamName(m.home_team_name_en);
+      const away = translateTeamName(m.away_team_name_en);
+      if (!home || !away) return false;
+      return (home === game.teamA && away === game.teamB) || (home === game.teamB && away === game.teamA);
     });
     if (!feedMatch) continue;
 
-    const teamAIsTeam1 = translateTeamName(feedMatch.team1) === game.teamA;
-    const result = extractResultFromFeedMatch(feedMatch, teamAIsTeam1);
+    const teamAIsHome = translateTeamName(feedMatch.home_team_name_en) === game.teamA;
+    const result = extractResultFromFeedMatch(feedMatch, teamAIsHome);
     if (!result) continue;
 
     try {
@@ -1113,6 +1124,11 @@ function renderGameCard(game) {
     el("option", { value: "pens" }, "Grandes penalidades"),
   ]);
   const pensOption = modeSelect.querySelector('option[value="pens"]');
+  // Este handler faltava — sem ele, escolher "Prolongamento" no menu
+  // mudava o que aparecia no ecrã mas nunca guardava a escolha, porque
+  // nada atualizava local.mode. Era por isso que a fase não ficava
+  // gravada na aposta.
+  modeSelect.onchange = () => { local.mode = modeSelect.value; };
 
   const hint = el("p", { class: "pending-msg", style: "margin:6px 0 0" }, "");
 
@@ -1510,7 +1526,7 @@ function renderAdminPanel() {
 function renderAutoResultsBox() {
   const box = el("div", { style: "border:1px solid var(--navy-600); border-radius:var(--radius); padding:12px; margin-bottom:14px" });
   box.appendChild(el("p", { style: "margin:0 0 8px" },
-    "🤖 Os resultados são confirmados automaticamente a partir de uma fonte gratuita (openfootball/worldcup.json), a cada 5 minutos, enquanto tiveres o site aberto nesta conta de host. Não é instantâneo — depende de a fonte já ter o resultado — mas não precisas de meter nada à mão a não ser que queiras corrigir algo."));
+    "🤖 Os resultados são confirmados automaticamente a partir de uma fonte gratuita (worldcup26.ir), a cada 5 minutos, enquanto tiveres o site aberto nesta conta de host. Não é instantâneo — depende de a fonte já ter o resultado. Limitação conhecida: um jogo decidido em prolongamento SEM ir a pénaltis pode ficar marcado como \"tempo regular\" (a fonte não distingue isso) — corrige à mão com \"🔓 Corrigir\" se souberes que foi o caso."));
   const btn = el("button", { class: "small" }, "🔄 verificar resultados agora");
   btn.onclick = async () => {
     btn.disabled = true;
